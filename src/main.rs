@@ -15,6 +15,9 @@ use cmds::js::{
     lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd, prisma_cmd, tsc_cmd,
     vitest_cmd,
 };
+// JVM-GRADLE BEGIN
+use cmds::jvm::gradle_cmd;
+// JVM-GRADLE END
 use cmds::python::{mypy_cmd, pip_cmd, pytest_cmd, ruff_cmd};
 use cmds::ruby::{rake_cmd, rspec_cmd, rubocop_cmd};
 use cmds::rust::{cargo_cmd, runner};
@@ -642,6 +645,13 @@ enum Commands {
         command: GoCommands,
     },
 
+    // JVM-GRADLE BEGIN
+    /// Gradle commands with compact output
+    Gradle {
+        #[command(subcommand)]
+        command: GradleCommands,
+    },
+    // JVM-GRADLE END
     /// Graphite (gt) stacked PR commands with compact output
     Gt {
         #[command(subcommand)]
@@ -1032,6 +1042,52 @@ enum GoCommands {
     #[command(external_subcommand)]
     Other(Vec<OsString>),
 }
+
+// JVM-GRADLE BEGIN
+#[derive(Subcommand)]
+enum GradleCommands {
+    /// Build the project with compact output
+    Build {
+        /// Additional gradle build arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run tests with compact output
+    Test {
+        /// Additional gradle test arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Assemble the project with compact output
+    Assemble {
+        /// Additional gradle assemble arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Clean the project with compact output
+    Clean {
+        /// Additional gradle clean arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run checks with compact output
+    Check {
+        /// Additional gradle check arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run Spring Boot application with compact output
+    #[command(name = "bootRun")]
+    BootRun {
+        /// Additional gradle bootRun arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: runs any unsupported gradle subcommand directly
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
+}
+// JVM-GRADLE END
 
 /// RTK-only subcommands that should never fall back to raw execution.
 /// If Clap fails to parse these, show the Clap error directly.
@@ -1917,6 +1973,29 @@ fn run_cli() -> Result<i32> {
             GoCommands::Other(args) => go_cmd::run_other(&args, cli.verbose)?,
         },
 
+        // JVM-GRADLE BEGIN
+        Commands::Gradle { command } => match command {
+            GradleCommands::Build { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::Build, &args, cli.verbose)?
+            }
+            GradleCommands::Test { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::Test, &args, cli.verbose)?
+            }
+            GradleCommands::Assemble { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::Assemble, &args, cli.verbose)?
+            }
+            GradleCommands::Clean { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::Clean, &args, cli.verbose)?
+            }
+            GradleCommands::Check { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::Check, &args, cli.verbose)?
+            }
+            GradleCommands::BootRun { args } => {
+                gradle_cmd::run(gradle_cmd::GradleCommand::BootRun, &args, cli.verbose)?
+            }
+            GradleCommands::Other(args) => gradle_cmd::run_passthrough(&args, cli.verbose)?,
+        },
+        // JVM-GRADLE END
         Commands::Gt { command } => match command {
             GtCommands::Log { args } => gt_cmd::run_log(&args, cli.verbose)?,
             GtCommands::Submit { args } => gt_cmd::run_submit(&args, cli.verbose)?,
@@ -2204,6 +2283,8 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Go { .. }
             | Commands::GolangciLint { .. }
             | Commands::Gt { .. }
+            // JVM-GRADLE BEGIN
+            | Commands::Gradle { .. } // JVM-GRADLE END
     )
 }
 

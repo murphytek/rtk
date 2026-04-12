@@ -5,6 +5,9 @@ pub mod dotnet;
 pub mod git;
 pub mod go;
 pub mod js;
+// JVM-GRADLE BEGIN
+pub mod jvm;
+// JVM-GRADLE END
 pub mod python;
 pub mod ruby;
 pub mod rust;
