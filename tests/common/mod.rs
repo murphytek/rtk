@@ -1,7 +1,14 @@
-//! Thin test helpers that replicate filter logic from src/cmds/jvm/ for use
-//! in integration tests. These are intentionally minimal — they use the same
-//! regex patterns as the production code but don't depend on the binary crate's
-//! internal module graph (which is inaccessible from tests/ in a bin-only crate).
+//! Thin test helpers that *approximate* filter logic from src/cmds/jvm/ for use
+//! in integration tests. They cannot share code with the binary crate (its
+//! modules are inaccessible from `tests/` in a bin-only crate), so the patterns
+//! here are duplicated by hand.
+//!
+//! **Caveat:** this file can drift from production. The integration tests are
+//! a smoke check on representative compression, NOT a byte-for-byte regression
+//! suite. Treat them as: "the production filter must compress fixtures at least
+//! as well as this minimal subset". For exact filter behavior, see the inline
+//! TOML tests in `src/filters/*.toml` and the per-module unit tests in
+//! `src/cmds/jvm/*.rs`.
 
 use regex::Regex;
 

@@ -78,9 +78,12 @@ lazy_static! {
     // Generic harmless task chatter (echo, delete, mkdir, copy, move, etc.).
     static ref RE_STRIP_TASK_CHATTER: Regex =
         Regex::new(r"^\s+\[(echo|delete|mkdir|copy|move|propertyfile|fixcrlf)\]").unwrap();
-    // [javac] prefix (informational lines — error lines are already kept above by RE_KEEP_JAVAC_ERROR).
-    static ref RE_STRIP_JAVAC_PREFIX: Regex =
-        Regex::new(r"^\s+\[javac\]").unwrap();
+    // [javac] informational chatter only — never strip lines that contain
+    // diagnostic context (source snippets, carets, symbol/location, error count
+    // summaries). Stripping all `[javac]` lines drops the user-actionable
+    // continuation lines that follow a `file:line: error:` header.
+    static ref RE_STRIP_JAVAC_INFO: Regex =
+        Regex::new(r"^\s+\[javac\]\s+(?:Compiling\b|Note:|Compiled\b|warning:\s*\[options\])").unwrap();
 }
 
 /// Execute a known ant target with compact filtering.
@@ -167,7 +170,7 @@ pub fn filter_ant_build(output: &str) -> String {
         if RE_STRIP_BUILDFILE.is_match(line)
             || RE_STRIP_TARGET.is_match(line)
             || RE_STRIP_TASK_CHATTER.is_match(line)
-            || RE_STRIP_JAVAC_PREFIX.is_match(line)
+            || RE_STRIP_JAVAC_INFO.is_match(line)
         {
             continue;
         }
