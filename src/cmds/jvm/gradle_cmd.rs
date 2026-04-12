@@ -109,25 +109,90 @@ lazy_static! {
         Regex::new(r"\.(java|kt|groovy|scala):\d+").unwrap();
 }
 
-/// Inject `--console=plain` (kills live progress bars + ANSI escapes) unless the
-/// user already specified a console mode. Supported on all maintained Gradle
-/// versions (5.0+).
+/// Global kill-switch: `RTK_NO_INJECT_FLAGS=1` skips all flag injection.
+/// Escape hatch for users hitting unexpected build-tool quirks.
+fn injection_disabled() -> bool {
+    match std::env::var("RTK_NO_INJECT_FLAGS") {
+        Ok(v) => !v.is_empty() && v != "0",
+        Err(_) => false,
+    }
+}
+
+/// Probe Gradle's major version. Cached per binary path.
+/// Returns `None` if probing fails (unparseable output, binary missing, etc.).
+fn probe_gradle_major(command: &std::process::Command) -> Option<u32> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref CACHE: Mutex<HashMap<std::ffi::OsString, Option<u32>>> =
+            Mutex::new(HashMap::new());
+    }
+
+    let bin = command.get_program().to_os_string();
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(cached) = cache.get(&bin) {
+            return *cached;
+        }
+    }
+
+    // `gradle --version` prints "Gradle X.Y.Z" on its own line.
+    let parsed = std::process::Command::new(&bin)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| {
+            let text = String::from_utf8_lossy(&o.stdout).into_owned();
+            text.lines()
+                .find_map(|l| l.trim().strip_prefix("Gradle "))
+                .and_then(|v| v.split('.').next())
+                .and_then(|major| major.parse::<u32>().ok())
+        });
+
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(bin, parsed);
+    }
+    parsed
+}
+
+/// `--console=plain` was added in Gradle 3.0 but only became reliably useful
+/// starting at 5.0 (earlier versions' plain console still emitted lots of
+/// progress noise). For 4.x-and-older, fall back to no injection — the user
+/// will see legacy output, but the build will work.
+fn supports_console_plain(command: &std::process::Command) -> bool {
+    match probe_gradle_major(command) {
+        Some(major) => major >= 5,
+        // Fail-CLOSED: when in doubt, don't inject.
+        None => false,
+    }
+}
+
+/// Inject `--console=plain` (kills live progress bars + ANSI escapes) unless:
+/// - `RTK_NO_INJECT_FLAGS` env var is set (global kill-switch)
+/// - the user already specified a console mode
+/// - the resolved Gradle is < 5.0
 fn inject_quiet_flags(command: &mut std::process::Command, args: &[String]) {
+    if injection_disabled() {
+        return;
+    }
     let already_has_console = args
         .iter()
         .any(|a| a == "--console" || a.starts_with("--console="));
-    if !already_has_console {
+    if !already_has_console && supports_console_plain(command) {
         command.arg("--console=plain");
     }
 }
 
 /// Same as [`inject_quiet_flags`] for OsString-based passthrough args.
 fn inject_quiet_flags_os(command: &mut std::process::Command, args: &[OsString]) {
+    if injection_disabled() {
+        return;
+    }
     let already_has_console = args.iter().any(|a| {
         let s = a.to_string_lossy();
         s == "--console" || s.starts_with("--console=")
     });
-    if !already_has_console {
+    if !already_has_console && supports_console_plain(command) {
         command.arg("--console=plain");
     }
 }
