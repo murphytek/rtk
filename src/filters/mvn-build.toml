@@ -1,17 +1,30 @@
 [filters.mvn-build]
 description = "Compact Maven build output"
-match_command = "^mvn\\s+(compile|package|clean|install)\\b"
+match_command = "^mvn\\s+(compile|package|clean|install|test|verify)\\b"
 strip_ansi = true
 strip_lines_matching = [
+  "^Scanning for projects",
+  "^\\[INFO\\] Scanning for projects",
+  "^\\[INFO\\] Reactor",
   "^\\[INFO\\] ---",
+  "^\\[INFO\\] -+$",
+  "^\\[INFO\\] =+$",
+  "^\\[INFO\\] $",
+  "^\\[INFO\\]\\s*$",
   "^\\[INFO\\] Building\\s",
   "^\\[INFO\\] Downloading\\s",
   "^\\[INFO\\] Downloaded\\s",
-  "^\\[INFO\\]\\s*$",
-  "^\\s*$",
+  "^Downloading from\\s",
+  "^Downloaded from\\s",
   "^Downloading:",
   "^Downloaded:",
-  "^Progress",
+  "^Progress \\(\\d+\\)",
+  "^Progress\\s",
+  "^WARNING: A restricted method",
+  "^WARNING: java\\.lang\\.System::load",
+  "^WARNING: Use --enable-native-access",
+  "^WARNING: Restricted methods will be blocked",
+  "^\\s*$",
 ]
 max_lines = 50
 on_empty = "mvn: ok"
@@ -42,3 +55,19 @@ input = """
 [INFO] Finished at: 2024-01-15T10:30:00Z
 """
 expected = "[INFO] BUILD SUCCESS\n[INFO] Total time: 4.123 s\n[INFO] Finished at: 2024-01-15T10:30:00Z"
+
+[[tests.mvn-build]]
+name = "strips JDK restricted-method and download progress noise"
+input = """
+Scanning for projects...
+[INFO] Reactor Build Order:
+Downloading from central: https://repo.maven.apache.org/foo.jar
+Downloaded from central: https://repo.maven.apache.org/foo.jar (12 kB at 4 kB/s)
+Progress (1): 4/12 kB
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.fusesource.jansi
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning
+WARNING: Restricted methods will be blocked in a future release
+[INFO] BUILD SUCCESS
+"""
+expected = "[INFO] BUILD SUCCESS"
