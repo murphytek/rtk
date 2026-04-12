@@ -5,9 +5,7 @@ pub mod dotnet;
 pub mod git;
 pub mod go;
 pub mod js;
-// JVM-MVN BEGIN
 pub mod jvm;
-// JVM-MVN END
 pub mod python;
 pub mod ruby;
 pub mod rust;
