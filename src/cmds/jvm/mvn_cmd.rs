@@ -389,6 +389,22 @@ fn is_mvn_noise(line: &str) -> bool {
                 r"^\[INFO\] Starting audit\.\.\.",
                 r"^\[INFO\] Audit done\.",
                 r"^\[INFO\] Using 'UTF-8' encoding to copy filtered resources\.",
+                // Aligned with mvn-build.toml — keep both pattern sources in sync
+                r"^\[INFO\] --< ",
+                r"^\[INFO\]\s+from ",
+                r"^\[INFO\]\s+T E S T S",
+                r"^\[INFO\] Results:",
+                r"^\[INFO\] Using auto detected provider",
+                r"^\[INFO\] skip non existing resourceDirectory",
+                r"^\[INFO\] Finished at:",
+                r"^\[WARNING\].*java\.applet\.",
+                r"^\[WARNING\].*has been deprecated and marked for removal",
+                r"^\[WARNING\].*\bhas been deprecated\b",
+                r"^WARNING: A terminally deprecated method",
+                r"^WARNING: Please consider reporting this to the maintainers",
+                r"^WARNING: .*will be removed in a future release",
+                r"^WARNING: sun\.misc\.Unsafe::objectFieldOffset will be removed",
+                r"^SLF4J:",
             ];
             raw.iter()
                 .map(|p| Regex::new(p).expect("invariant: static mvn pattern compiles"))

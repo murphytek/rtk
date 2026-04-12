@@ -356,13 +356,9 @@ pub fn resolve_binary(name: &str) -> Result<PathBuf> {
 pub fn resolved_build_command(name: &str) -> Command {
     let wrapper = format!("{}w", name);
 
-    // Unix-style wrapper (works on macOS, Linux, and Git Bash on Windows).
-    let unix_wrapper = std::path::Path::new(&wrapper);
-    if unix_wrapper.exists() {
-        return Command::new(format!("./{}", wrapper));
-    }
-
-    // Windows native wrappers.
+    // On Windows, prefer the native wrapper first — `./mvnw` (a shebang shell
+    // script) doesn't execute under CreateProcess, while `mvnw.cmd` /
+    // `gradlew.bat` do. Most repos ship both side-by-side.
     #[cfg(target_os = "windows")]
     {
         for ext in &["cmd", "bat"] {
@@ -370,6 +366,15 @@ pub fn resolved_build_command(name: &str) -> Command {
             if std::path::Path::new(&win_wrapper).exists() {
                 return Command::new(format!(".\\{}", win_wrapper));
             }
+        }
+    }
+
+    // Unix-style wrapper (macOS, Linux, also works under Git Bash if no .cmd).
+    #[cfg(not(target_os = "windows"))]
+    {
+        let unix_wrapper = std::path::Path::new(&wrapper);
+        if unix_wrapper.exists() {
+            return Command::new(format!("./{}", wrapper));
         }
     }
 

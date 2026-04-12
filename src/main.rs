@@ -1214,7 +1214,7 @@ enum GradleCommands {
 // JVM-ANT BEGIN
 #[derive(Subcommand)]
 enum AntCommands {
-    /// Run the default build target with compact output
+    /// Run the `build` target with compact output (use Other to invoke the default target instead)
     Build {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
