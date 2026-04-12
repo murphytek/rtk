@@ -485,15 +485,17 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // JVM-MVN BEGIN
     RtkRule {
-        pattern: r"^mvn\s+(compile|package|clean|install)\b",
+        pattern: r"^(?:mvn|mvnw)\s+(compile|package|clean|install|test|verify)\b",
         rtk_cmd: "rtk mvn",
-        rewrite_prefixes: &["mvn"],
+        rewrite_prefixes: &["./mvnw", "mvnw", "mvn"],
         category: "Build",
         savings_pct: 70.0,
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // JVM-MVN END
     RtkRule {
         pattern: r"^ping\b",
         rtk_cmd: "rtk ping",
@@ -656,6 +658,21 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // JVM-GRADLE BEGIN
+    RtkRule {
+        // Matches `gradle ...`, `./gradlew ...` and `gradlew ...`
+        // (strip_absolute_path normalizes `./gradlew` → `gradlew` for classify,
+        // but rewrite_segment uses the un-normalized cmd, so both prefixes are
+        // listed in rewrite_prefixes below).
+        pattern: r"^(?:gradle|gradlew)\s+(build|test|assemble|clean|check|bootRun)\b",
+        rtk_cmd: "rtk gradle",
+        rewrite_prefixes: &["./gradlew", "gradlew", "gradle"],
+        category: "Build",
+        savings_pct: 75.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // JVM-GRADLE END
 ];
 
 pub const IGNORED_PREFIXES: &[&str] = &[
