@@ -673,6 +673,17 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     // JVM-GRADLE END
+    // JVM-ANT BEGIN
+    RtkRule {
+        pattern: r"^ant\s+(build|clean|test|compile|package|install)\b",
+        rtk_cmd: "rtk ant",
+        rewrite_prefixes: &["ant"],
+        category: "Build",
+        savings_pct: 75.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // JVM-ANT END
 ];
 
 pub const IGNORED_PREFIXES: &[&str] = &[
