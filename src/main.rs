@@ -21,6 +21,9 @@ use cmds::js::{
 // JVM-GRADLE BEGIN
 use cmds::jvm::gradle_cmd;
 // JVM-GRADLE END
+// JVM-ANT BEGIN
+use cmds::jvm::ant_cmd;
+// JVM-ANT END
 use cmds::python::{mypy_cmd, pip_cmd, pytest_cmd, ruff_cmd};
 use cmds::ruby::{rake_cmd, rspec_cmd, rubocop_cmd};
 use cmds::rust::{cargo_cmd, runner};
@@ -727,6 +730,14 @@ enum Commands {
         command: GradleCommands,
     },
     // JVM-GRADLE END
+
+    // JVM-ANT BEGIN
+    /// Apache Ant commands with compact output
+    Ant {
+        #[command(subcommand)]
+        command: AntCommands,
+    },
+    // JVM-ANT END
     /// Graphite (gt) stacked PR commands with compact output
     Gt {
         #[command(subcommand)]
@@ -1199,6 +1210,45 @@ enum GradleCommands {
     Other(Vec<OsString>),
 }
 // JVM-GRADLE END
+
+// JVM-ANT BEGIN
+#[derive(Subcommand)]
+enum AntCommands {
+    /// Run the default build target with compact output
+    Build {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Clean build artifacts with compact output
+    Clean {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run tests with compact output
+    Test {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compile sources with compact output
+    Compile {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Package the project with compact output
+    Package {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Install artifacts with compact output
+    Install {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: run any other ant target with noise-filtered output
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
+}
+// JVM-ANT END
 
 /// RTK-only subcommands that should never fall back to raw execution.
 /// If Clap fails to parse these, show the Clap error directly.
@@ -2235,6 +2285,30 @@ fn run_cli() -> Result<i32> {
             GradleCommands::Other(args) => gradle_cmd::run_passthrough(&args, cli.verbose)?,
         },
         // JVM-GRADLE END
+
+        // JVM-ANT BEGIN
+        Commands::Ant { command } => match command {
+            AntCommands::Build { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Build, &args, cli.verbose)?
+            }
+            AntCommands::Clean { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Clean, &args, cli.verbose)?
+            }
+            AntCommands::Test { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Test, &args, cli.verbose)?
+            }
+            AntCommands::Compile { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Compile, &args, cli.verbose)?
+            }
+            AntCommands::Package { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Package, &args, cli.verbose)?
+            }
+            AntCommands::Install { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Install, &args, cli.verbose)?
+            }
+            AntCommands::Other(args) => ant_cmd::run_passthrough(&args, cli.verbose)?,
+        },
+        // JVM-ANT END
         Commands::Gt { command } => match command {
             GtCommands::Log { args } => gt_cmd::run_log(&args, cli.verbose)?,
             GtCommands::Submit { args } => gt_cmd::run_submit(&args, cli.verbose)?,
@@ -2580,10 +2654,9 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Go { .. }
             | Commands::GolangciLint { .. }
             | Commands::Gt { .. }
-            // JVM-MVN BEGIN
-            | Commands::Mvn { .. } // JVM-MVN END
-            // JVM-GRADLE BEGIN
-            | Commands::Gradle { .. } // JVM-GRADLE END
+            | Commands::Mvn { .. }
+            | Commands::Gradle { .. }
+            | Commands::Ant { .. }
     )
 }
 

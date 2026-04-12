@@ -4,9 +4,12 @@
 //! warnings, but preserves failure markers, deprecation warnings, test failures,
 //! compiler errors and the final `BUILD SUCCESSFUL`/`BUILD FAILED` lines.
 
+use crate::cmds::jvm::line_dedup::dedupe_repeated_lines;
+use crate::cmds::jvm::stack_dedup::dedupe_stack_traces;
+use crate::cmds::jvm::stack_trim::trim_stack_noise;
 use crate::core::runner;
 use crate::core::tracking;
-use crate::core::utils::{exit_code_from_output, resolved_command, truncate};
+use crate::core::utils::{exit_code_from_output, resolved_build_command, truncate};
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -106,9 +109,33 @@ lazy_static! {
         Regex::new(r"\.(java|kt|groovy|scala):\d+").unwrap();
 }
 
+/// Inject `--console=plain` (kills live progress bars + ANSI escapes) unless the
+/// user already specified a console mode. Supported on all maintained Gradle
+/// versions (5.0+).
+fn inject_quiet_flags(command: &mut std::process::Command, args: &[String]) {
+    let already_has_console = args
+        .iter()
+        .any(|a| a == "--console" || a.starts_with("--console="));
+    if !already_has_console {
+        command.arg("--console=plain");
+    }
+}
+
+/// Same as [`inject_quiet_flags`] for OsString-based passthrough args.
+fn inject_quiet_flags_os(command: &mut std::process::Command, args: &[OsString]) {
+    let already_has_console = args.iter().any(|a| {
+        let s = a.to_string_lossy();
+        s == "--console" || s.starts_with("--console=")
+    });
+    if !already_has_console {
+        command.arg("--console=plain");
+    }
+}
+
 /// Run a known gradle subcommand with filtered output.
 pub fn run(cmd: GradleCommand, args: &[String], verbose: u8) -> Result<i32> {
-    let mut command = resolved_command("gradle");
+    let mut command = resolved_build_command("gradle");
+    inject_quiet_flags(&mut command, args);
     command.arg(cmd.as_task());
 
     for arg in args {
@@ -148,7 +175,8 @@ pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
 
     let subcommand = args[0].to_string_lossy().into_owned();
-    let mut cmd = resolved_command("gradle");
+    let mut cmd = resolved_build_command("gradle");
+    inject_quiet_flags_os(&mut cmd, args);
     for arg in args {
         cmd.arg(arg);
     }
@@ -180,9 +208,13 @@ pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
 
 /// Line-by-line strip for a single Gradle output stream.
 fn strip_gradle_noise(output: &str) -> Vec<String> {
+    // Collapse repeated JVM stack-frame blocks first, trim intra-trace noise,
+    // then collapse repeated single lines (e.g. 26x "> Configure project :foo")
+    // before per-line filtering so the keep/strip logic sees a compact input.
+    let deduped = dedupe_repeated_lines(&trim_stack_noise(&dedupe_stack_traces(output)));
     let mut kept: Vec<String> = Vec::new();
 
-    for raw_line in output.lines() {
+    for raw_line in deduped.lines() {
         // Gradle overwrites progress using carriage return; each "line" may contain
         // several embedded progress frames. Take the final segment for classification.
         let line = raw_line.rsplit('\r').next().unwrap_or(raw_line);

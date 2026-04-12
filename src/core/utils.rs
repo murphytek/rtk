@@ -47,7 +47,11 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 /// ```
 pub fn strip_ansi(text: &str) -> String {
     lazy_static::lazy_static! {
-        static ref ANSI_RE: Regex = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap();
+        // Strip ANSI escape sequences AND C0 control chars (except TAB \x09, LF \x0a, CR \x0d).
+        // The control-char strip handles backspace (\x08) and friends injected by `script` / pty
+        // wrappers, which would otherwise prefix lines and defeat ^anchored regex matches.
+        static ref ANSI_RE: Regex =
+            Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|[\x00-\x08\x0b\x0c\x0e-\x1f]").unwrap();
     }
     ANSI_RE.replace_all(text, "").to_string()
 }
@@ -336,6 +340,42 @@ pub fn resolve_binary(name: &str) -> Result<PathBuf> {
 ///
 /// # Returns
 /// A `Command` configured with the resolved binary path.
+/// Find a project-local build wrapper script (e.g. `./mvnw`, `./gradlew`) in the current
+/// working directory, falling back to `resolved_command(name)` when no wrapper is present.
+///
+/// Real Maven and Gradle projects pin tool versions via wrapper scripts. A naive
+/// `resolved_command("gradle")` will pick up the user's system Gradle (often a different
+/// major version) and break the build. This helper prefers the project's wrapper.
+///
+/// # Arguments
+/// * `name` - Base tool name (e.g., "mvn" or "gradle"). The wrapper is `{name}w`.
+///
+/// # Returns
+/// A `Command` using `./{name}w` (or the platform wrapper variant) when available,
+/// otherwise the resolved system binary via `resolved_command`.
+pub fn resolved_build_command(name: &str) -> Command {
+    let wrapper = format!("{}w", name);
+
+    // Unix-style wrapper (works on macOS, Linux, and Git Bash on Windows).
+    let unix_wrapper = std::path::Path::new(&wrapper);
+    if unix_wrapper.exists() {
+        return Command::new(format!("./{}", wrapper));
+    }
+
+    // Windows native wrappers.
+    #[cfg(target_os = "windows")]
+    {
+        for ext in &["cmd", "bat"] {
+            let win_wrapper = format!("{}.{}", wrapper, ext);
+            if std::path::Path::new(&win_wrapper).exists() {
+                return Command::new(format!(".\\{}", win_wrapper));
+            }
+        }
+    }
+
+    resolved_command(name)
+}
+
 pub fn resolved_command(name: &str) -> Command {
     match resolve_binary(name) {
         Ok(path) => Command::new(path),

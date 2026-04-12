@@ -28,9 +28,25 @@ strip_lines_matching = [
   "^Starting a Gradle Daemon",
   # jansi / SLF4J / native-platform restricted-access warnings
   "^WARNING: A restricted method",
+  "^WARNING: A terminally deprecated method",
   "^WARNING: java\\.lang\\.System::load has been called by net\\.rubygrapefruit\\.platform",
+  "^WARNING: sun\\.misc\\.Unsafe::",
+  "^WARNING: Please consider reporting this to the maintainers",
   "^WARNING: Use --enable-native-access",
   "^WARNING: Restricted methods will be blocked",
+  "^WARNING: .*will be removed in a future release",
+  # Gradle release-notes banner shown on first daemon start
+  "^Here are the highlights of this release:",
+  "^For more details see https://docs\\.gradle\\.org/",
+  "^\\s+- ",
+  # JVM forking / daemon-tuning hints
+  "^To honour the JVM settings for this build",
+  "^Consider enabling configuration cache",
+  # Wrapper download progress dots: ".....10%......"
+  "^[.]+\\d+%[.]*$",
+  # Gradle-bundled help footer (verbose, never useful)
+  "^You can use --scan",
+  "^Use '--warning-mode all' to show",
 ]
 truncate_lines_at = 200
 max_lines = 80

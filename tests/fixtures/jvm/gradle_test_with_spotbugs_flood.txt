@@ -1,0 +1,98 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+Configure project :
+Configure project :app
+Configure project :lib
+Configure project :common
+Configure project :domain
+Configure project :infrastructure
+
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources UP-TO-DATE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :domain:compileJava UP-TO-DATE
+> Task :domain:processResources UP-TO-DATE
+> Task :domain:classes UP-TO-DATE
+> Task :domain:jar UP-TO-DATE
+> Task :infrastructure:compileJava UP-TO-DATE
+> Task :infrastructure:processResources UP-TO-DATE
+> Task :infrastructure:classes UP-TO-DATE
+> Task :infrastructure:jar UP-TO-DATE
+> Task :lib:compileJava UP-TO-DATE
+> Task :lib:processResources UP-TO-DATE
+> Task :lib:classes UP-TO-DATE
+> Task :lib:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:compileTestJava UP-TO-DATE
+> Task :app:processTestResources UP-TO-DATE
+> Task :app:testClasses UP-TO-DATE
+<1/16 tasks> 6% EXECUTING
+<3/16 tasks> 18% EXECUTING
+<5/16 tasks> 31% EXECUTING
+<7/16 tasks> 43% EXECUTING
+<9/16 tasks> 56% EXECUTING
+<11/16 tasks> 68% EXECUTING
+<13/16 tasks> 81% EXECUTING
+<15/16 tasks> 93% EXECUTING
+> Task :app:test FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:test'.
+> There were failing tests. See the report at: file:///home/runner/project/app/build/reports/tests/test/index.html
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+edu.umd.cs.findbugs.ba.AnalysisException: null
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.computeApplicableScopedApplications(TypeQualifierApplications.java:434)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getApplicableScopedApplications(TypeQualifierApplications.java:399)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.applyApplicationsForParameters(TypeQualifierApplications.java:526)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotation(TypeQualifierApplications.java:559)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotations(TypeQualifierApplications.java:578)
+	at edu.umd.cs.findbugs.classfile.analysis.AnnotatedObject.getAnnotations(AnnotatedObject.java:89)
+	at edu.umd.cs.findbugs.AnnotationRetentionDatabase.retainedAtRuntime(AnnotationRetentionDatabase.java:65)
+	at edu.umd.cs.findbugs.detect.RuntimeExceptionCapture.visitAnnotation(RuntimeExceptionCapture.java:67)
+	at edu.umd.cs.findbugs.visitclass.AnnotationVisitor.visit(AnnotationVisitor.java:73)
+	at edu.umd.cs.findbugs.classfile.engine.bcel.ClassParser.parse(ClassParser.java:109)
+	at edu.umd.cs.findbugs.ba.AnalysisContext.getBytecodeSet(AnalysisContext.java:531)
+	at edu.umd.cs.findbugs.detect.FindNullDeref.visitClassContext(FindNullDeref.java:203)
+	at edu.umd.cs.findbugs.Detector2ToDetectorAdapter.visitClass(Detector2ToDetectorAdapter.java:98)
+	at edu.umd.cs.findbugs.FindBugs2.analyzeApplication(FindBugs2.java:564)
+edu.umd.cs.findbugs.ba.AnalysisException: null
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.computeApplicableScopedApplications(TypeQualifierApplications.java:434)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getApplicableScopedApplications(TypeQualifierApplications.java:399)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.applyApplicationsForParameters(TypeQualifierApplications.java:526)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotation(TypeQualifierApplications.java:559)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotations(TypeQualifierApplications.java:578)
+	at edu.umd.cs.findbugs.classfile.analysis.AnnotatedObject.getAnnotations(AnnotatedObject.java:89)
+	at edu.umd.cs.findbugs.AnnotationRetentionDatabase.retainedAtRuntime(AnnotationRetentionDatabase.java:65)
+	at edu.umd.cs.findbugs.detect.RuntimeExceptionCapture.visitAnnotation(RuntimeExceptionCapture.java:67)
+	at edu.umd.cs.findbugs.visitclass.AnnotationVisitor.visit(AnnotationVisitor.java:73)
+	at edu.umd.cs.findbugs.classfile.engine.bcel.ClassParser.parse(ClassParser.java:109)
+	at edu.umd.cs.findbugs.ba.AnalysisContext.getBytecodeSet(AnalysisContext.java:531)
+	at edu.umd.cs.findbugs.detect.FindNullDeref.visitClassContext(FindNullDeref.java:203)
+	at edu.umd.cs.findbugs.detect.Detector2ToDetectorAdapter.visitClass(Detector2ToDetectorAdapter.java:98)
+	at edu.umd.cs.findbugs.FindBugs2.analyzeApplication(FindBugs2.java:564)
+edu.umd.cs.findbugs.ba.AnalysisException: null
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.computeApplicableScopedApplications(TypeQualifierApplications.java:434)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getApplicableScopedApplications(TypeQualifierApplications.java:399)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.applyApplicationsForParameters(TypeQualifierApplications.java:526)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotation(TypeQualifierApplications.java:559)
+	at edu.umd.cs.findbugs.ba.jsr305.TypeQualifierApplications.getEffectiveTypeQualifierAnnotations(TypeQualifierApplications.java:578)
+	at edu.umd.cs.findbugs.classfile.analysis.AnnotatedObject.getAnnotations(AnnotatedObject.java:89)
+	at edu.umd.cs.findbugs.AnnotationRetentionDatabase.retainedAtRuntime(AnnotationRetentionDatabase.java:65)
+	at edu.umd.cs.findbugs.detect.RuntimeExceptionCapture.visitAnnotation(RuntimeExceptionCapture.java:67)
+	at edu.umd.cs.findbugs.visitclass.AnnotationVisitor.visit(AnnotationVisitor.java:73)
+	at edu.umd.cs.findbugs.classfile.engine.bcel.ClassParser.parse(ClassParser.java:109)
+	at edu.umd.cs.findbugs.ba.AnalysisContext.getBytecodeSet(AnalysisContext.java:531)
+	at edu.umd.cs.findbugs.detect.FindNullDeref.visitClassContext(FindNullDeref.java:203)
+	at edu.umd.cs.findbugs.detect.Detector2ToDetectorAdapter.visitClass(Detector2ToDetectorAdapter.java:98)
+	at edu.umd.cs.findbugs.FindBugs2.analyzeApplication(FindBugs2.java:564)
+
+BUILD FAILED in 23s
+4 actionable tasks: 1 executed, 3 up-to-date

@@ -21,9 +21,46 @@ strip_lines_matching = [
   "^Progress \\(\\d+\\)",
   "^Progress\\s",
   "^WARNING: A restricted method",
+  "^WARNING: A terminally deprecated method",
   "^WARNING: java\\.lang\\.System::load",
+  "^WARNING: sun\\.misc\\.Unsafe::",
+  "^WARNING: Please consider reporting this to the maintainers",
   "^WARNING: Use --enable-native-access",
   "^WARNING: Restricted methods will be blocked",
+  "^WARNING: .*will be removed in a future release",
+  # Reactor artifact headers (multi-module noise)
+  "^\\[INFO\\] --< ",
+  "^\\[INFO\\]\\s+from ",
+  # Surefire / failsafe decorative banners (kept Tests run: summary)
+  "^\\[INFO\\]\\s+T E S T S",
+  "^\\[INFO\\] Results:",
+  "^\\[INFO\\] Using auto detected provider",
+  # Plugin chatter that's never actionable
+  "^\\[INFO\\] skip non existing resourceDirectory",
+  "^\\[INFO\\] Finished at:",
+  # Java compiler legacy-deprecation noise (e.g. java.applet.*)
+  "^\\[WARNING\\].*java\\.applet\\.",
+  "^\\[WARNING\\].*has been deprecated and marked for removal",
+  # JVM 25 sun.misc.Unsafe deprecation footer block (4 lines)
+  "^WARNING: sun\\.misc\\.Unsafe::objectFieldOffset",
+  "^WARNING: This is a critical method",
+  "^WARNING: A terminally deprecated method in sun\\.misc\\.Unsafe",
+  "^WARNING: sun\\.misc\\.Unsafe::objectFieldOffset will be removed",
+  # java.applet-style deprecation-only warnings (PURELY deprecation announcements)
+  "^\\[WARNING\\].*\\bhas been deprecated\\b",
+  # pgpverify-maven-plugin config-block chatter (before per-artifact lines)
+  "^\\[INFO\\] Key server\\(s\\)",
+  "^\\[INFO\\] Create cache directory for PGP keys:",
+  "^\\[INFO\\] Resolved \\d+ artifact\\(s\\)",
+  "^\\[INFO\\] Artifacts were already validated",
+  # Corpus-discovered patterns (resources, checkstyle, OpenAPI gen)
+  "^\\[INFO\\] writing file ",
+  "^\\[INFO\\] Preparing remote bundle ",
+  "^\\[INFO\\] Copying \\d+ resource",
+  "^\\[INFO\\] You have 0 Checkstyle violations\\.",
+  "^\\[INFO\\] Starting audit\\.\\.\\.",
+  "^\\[INFO\\] Audit done\\.",
+  "^\\[INFO\\] Using 'UTF-8' encoding to copy filtered resources\\.",
   "^\\s*$",
 ]
 max_lines = 50
