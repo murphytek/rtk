@@ -485,15 +485,17 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // JVM-MVN BEGIN
     RtkRule {
-        pattern: r"^mvn\s+(compile|package|clean|install)\b",
+        pattern: r"^(?:mvn|mvnw)\s+(compile|package|clean|install|test|verify)\b",
         rtk_cmd: "rtk mvn",
-        rewrite_prefixes: &["mvn"],
+        rewrite_prefixes: &["./mvnw", "mvnw", "mvn"],
         category: "Build",
         savings_pct: 70.0,
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // JVM-MVN END
     RtkRule {
         pattern: r"^ping\b",
         rtk_cmd: "rtk ping",
