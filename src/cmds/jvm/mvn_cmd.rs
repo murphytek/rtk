@@ -121,11 +121,27 @@ fn supports_no_transfer_progress(command: &std::process::Command) -> bool {
     }
 }
 
+/// Global kill-switch for flag injection. When `RTK_NO_INJECT_FLAGS` is set
+/// (any non-empty, non-"0" value), rtk passes all args through unchanged.
+/// Escape hatch for users hitting unexpected build-tool quirks where injected
+/// flags break their build.
+fn injection_disabled() -> bool {
+    match std::env::var("RTK_NO_INJECT_FLAGS") {
+        Ok(v) => !v.is_empty() && v != "0",
+        Err(_) => false,
+    }
+}
+
 /// Inject `--no-transfer-progress` (kills download chatter, Maven 3.6.1+ only)
 /// and `-B` (batch mode, no ANSI colors / interactive prompts; supported by
-/// every Maven we care about). Skips injection when the user already passed
-/// either flag or its short equivalent.
+/// every Maven we care about). Skips injection when:
+/// - `RTK_NO_INJECT_FLAGS` env var is set (global kill-switch)
+/// - the user already passed the flag or its short equivalent
+/// - for `--no-transfer-progress`: when the resolved Maven is < 3.6.1
 fn inject_quiet_flags(command: &mut std::process::Command, args: &[String]) {
+    if injection_disabled() {
+        return;
+    }
     let already_has = |flag: &str, short: Option<&str>| {
         args.iter().any(|a| {
             a == flag
@@ -143,6 +159,9 @@ fn inject_quiet_flags(command: &mut std::process::Command, args: &[String]) {
 
 /// Same as [`inject_quiet_flags`] but for the OsString-based passthrough path.
 fn inject_quiet_flags_os(command: &mut std::process::Command, args: &[OsString]) {
+    if injection_disabled() {
+        return;
+    }
     let already_has = |flag: &str, short: Option<&str>| {
         args.iter().any(|a| {
             a == flag
