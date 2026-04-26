@@ -1127,7 +1127,7 @@ enum GoCommands {
 }
 
 // JVM-MVN BEGIN
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum MvnCommands {
     /// Compile sources with compact output (maps to `mvn compile`)
     Build {
@@ -1166,7 +1166,7 @@ enum MvnCommands {
 // JVM-MVN END
 
 // JVM-GRADLE BEGIN
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum GradleCommands {
     /// Build the project with compact output
     Build {
@@ -1212,7 +1212,7 @@ enum GradleCommands {
 // JVM-GRADLE END
 
 // JVM-ANT BEGIN
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum AntCommands {
     /// Run the `build` target with compact output (use Other to invoke the default target instead)
     Build {

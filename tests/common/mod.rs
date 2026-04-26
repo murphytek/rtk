@@ -89,7 +89,11 @@ pub fn filter_mvn_build(output: &str) -> String {
         ].iter().map(|p| Regex::new(p).unwrap()).collect();
     }
     let out = strip_lines(output, &STRIP, &KEEP);
-    if out.trim().is_empty() { "mvn: ok".to_string() } else { out }
+    if out.trim().is_empty() {
+        "mvn: ok".to_string()
+    } else {
+        out
+    }
 }
 
 /// Maven test filter — same as build filter (surefire output is handled the same way).
@@ -126,7 +130,11 @@ pub fn filter_gradle_test(output: &str) -> String {
     // Collapse repeated identical lines (SpotBugs stack trace repeated N times)
     let deduped = dedupe_repeated_blocks(output);
     let out = strip_lines(&deduped, &STRIP, &KEEP);
-    if out.trim().is_empty() { "gradle test: ok".to_string() } else { out }
+    if out.trim().is_empty() {
+        "gradle test: ok".to_string()
+    } else {
+        out
+    }
 }
 
 /// Collapse consecutive identical blocks of lines that repeat ≥2 times,
@@ -195,5 +203,9 @@ pub fn filter_ant_build(output: &str) -> String {
         ].iter().map(|p| Regex::new(p).unwrap()).collect();
     }
     let out = strip_lines(output, &STRIP, &KEEP);
-    if out.trim().is_empty() { "ant: ok".to_string() } else { out }
+    if out.trim().is_empty() {
+        "ant: ok".to_string()
+    } else {
+        out
+    }
 }
