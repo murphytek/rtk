@@ -25,8 +25,14 @@ pub fn run(
         eprintln!("grep: '{}' in {}", pattern, path);
     }
 
-    // Fix: convert BRE alternation \| → | for rg (which uses PCRE-style regex)
-    let rg_pattern = pattern.replace(r"\|", "|");
+    // Translate grep BRE pipe semantics to rg's default (Rust regex / ERE-like) engine.
+    // In grep BRE: `\|` is alternation, a bare `|` is a LITERAL pipe.
+    // In rg default: `|` is alternation, `\|` is a LITERAL pipe — i.e. the two are SWAPPED.
+    // The previous code only rewrote `\|` → `|`, which silently left a bare `|` to be
+    // re-interpreted by rg as alternation. So `rtk grep 'a|b'` (grep user wanting the
+    // literal string "a|b") over-matched: rg returned every line containing `a` OR `b`,
+    // feeding extra false matches to the caller. We must swap BOTH directions.
+    let rg_pattern = translate_bre_pipes(pattern);
 
     let mut rg_cmd = resolved_command("rg");
     // --no-ignore-vcs: match grep -r behavior (don't skip .gitignore'd files).
@@ -147,6 +153,48 @@ pub fn run(
     Ok(exit_code)
 }
 
+/// Translate grep BRE pipe semantics to the engine rg uses by default.
+///
+/// grep BRE:  `\|` = alternation,  `|` = literal pipe.
+/// rg default: `|` = alternation,  `\|` = literal pipe.
+///
+/// The two meanings are mirror images, so a naive `replace(r"\|", "|")` fixes only
+/// the alternation case and corrupts the literal-pipe case. We do a single scanning
+/// pass so neither rewrite clobbers the other, and we respect backslash escaping:
+/// a `\\` is a literal backslash and must not let the following `|` be read as `\|`.
+fn translate_bre_pipes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len() + 4);
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.peek() {
+                // `\|` in BRE = alternation → emit a bare `|` for rg.
+                Some('|') => {
+                    chars.next();
+                    out.push('|');
+                }
+                // `\\` = escaped backslash; keep both, don't consume the next char's meaning.
+                Some('\\') => {
+                    chars.next();
+                    out.push('\\');
+                    out.push('\\');
+                }
+                // Any other escape (`\.`, `\(`, `\d`, …) passes through verbatim.
+                Some(&next) => {
+                    chars.next();
+                    out.push('\\');
+                    out.push(next);
+                }
+                None => out.push('\\'),
+            },
+            // bare `|` in BRE = literal pipe → escape it so rg treats it literally.
+            '|' => out.push_str(r"\|"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn clean_line(line: &str, max_len: usize, context_re: Option<&Regex>, pattern: &str) -> String {
     let trimmed = line.trim();
 
@@ -254,12 +302,69 @@ mod tests {
         assert!(!cleaned.is_empty());
     }
 
-    // Fix: BRE \| alternation is translated to PCRE | for rg
+    // Fix: BRE \| alternation is translated to rg | (alternation)
     #[test]
     fn test_bre_alternation_translated() {
-        let pattern = r"fn foo\|pub.*bar";
-        let rg_pattern = pattern.replace(r"\|", "|");
-        assert_eq!(rg_pattern, "fn foo|pub.*bar");
+        // grep BRE `\|` (alternation) must become a bare `|` for rg.
+        assert_eq!(translate_bre_pipes(r"fn foo\|pub.*bar"), "fn foo|pub.*bar");
+    }
+
+    // Regression: a BARE `|` is a LITERAL pipe in grep BRE and must be escaped for rg,
+    // otherwise rg reads it as alternation and over-matches (false positives fed to the
+    // model). Before the fix, `rtk grep 'a|b'` matched every line containing `a` OR `b`.
+    #[test]
+    fn test_bare_pipe_treated_as_literal() {
+        // `a|b` (grep user wants the literal substring "a|b") → `a\|b` for rg (literal pipe).
+        assert_eq!(translate_bre_pipes("a|b"), r"a\|b");
+    }
+
+    // The two pipe meanings are mirror images; one pass must not clobber the other.
+    #[test]
+    fn test_mixed_literal_and_alternation_pipes() {
+        // `a|b\|c`: literal "a|b" OR literal "c"
+        //   bare `|`  → `\|` (literal)
+        //   `\|`      → `|`  (alternation)
+        assert_eq!(translate_bre_pipes(r"a|b\|c"), r"a\|b|c");
+    }
+
+    // Escaped backslash must not let the following pipe be misread as `\|`.
+    #[test]
+    fn test_escaped_backslash_before_pipe() {
+        // `\\|` = literal backslash, then a bare (literal) pipe → `\\` + `\|`
+        assert_eq!(translate_bre_pipes(r"\\|"), r"\\\|");
+    }
+
+    // Other escapes pass through verbatim (no accidental mangling of \. \( \d etc).
+    #[test]
+    fn test_other_escapes_passthrough() {
+        assert_eq!(translate_bre_pipes(r"foo\.bar\(x\)"), r"foo\.bar\(x\)");
+    }
+
+    // End-to-end against rg (skips gracefully if rg absent): the literal-pipe pattern
+    // must match ONLY the literal line, not the alternation-broadened set.
+    #[test]
+    fn test_bare_pipe_does_not_overmatch_via_rg() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("rtk_grep_pipe_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("data.txt");
+        if let Ok(mut f) = std::fs::File::create(&file) {
+            let _ = f.write_all(b"a|b\nalpha\nbeta\n");
+        }
+
+        let translated = translate_bre_pipes("a|b");
+        let mut cmd = resolved_command("rg");
+        cmd.args(["-n", "--no-heading", &translated, file.to_str().unwrap()]);
+        if let Ok(output) = cmd.output() {
+            let out = String::from_utf8_lossy(&output.stdout);
+            let match_count = out.lines().filter(|l| !l.trim().is_empty()).count();
+            // Literal "a|b" exists on exactly one line. Alternation would match 3.
+            assert_eq!(
+                match_count, 1,
+                "literal-pipe search must not over-match; got: {out:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Fix: -r flag (grep recursive) is stripped from extra_args (rg is recursive by default)
