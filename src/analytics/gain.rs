@@ -2,7 +2,7 @@
 
 use crate::core::display_helpers::{format_duration, print_period_table};
 use crate::core::tracking::{DayStats, MonthStats, Tracker, WeekStats};
-use crate::core::utils::format_tokens;
+use crate::core::utils::{format_tokens, truncate};
 use crate::hooks::hook_check;
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -232,11 +232,9 @@ pub fn run(
                 println!("──────────────────────────────────────────────────────────");
                 for rec in recent {
                     let time = rec.timestamp.with_timezone(&Local).format("%m-%d %H:%M");
-                    let cmd_short = if rec.rtk_cmd.len() > 25 {
-                        format!("{}...", &rec.rtk_cmd[..22])
-                    } else {
-                        rec.rtk_cmd.clone()
-                    };
+                    // char-safe: byte-slicing &rec.rtk_cmd[..22] panics on a
+                    // multi-byte UTF-8 boundary (e.g. non-ASCII branch/file names).
+                    let cmd_short = truncate(&rec.rtk_cmd, 25);
                     // added: tier indicators by savings level
                     let sign = if rec.savings_pct >= 70.0 {
                         "▲"
@@ -693,11 +691,8 @@ fn show_failures(tracker: &Tracker) -> Result<()> {
         println!("{}", styled("Top Commands (by frequency)", true));
         println!("{}", "─".repeat(60));
         for (cmd, count) in &summary.top_commands {
-            let cmd_display = if cmd.len() > 50 {
-                format!("{}...", &cmd[..47])
-            } else {
-                cmd.clone()
-            };
+            // char-safe truncation (raw byte slice panics on multi-byte UTF-8).
+            let cmd_display = truncate(cmd, 50);
             println!("  {:>4}x  {}", count, cmd_display);
         }
         println!();
@@ -713,15 +708,95 @@ fn show_failures(tracker: &Tracker) -> Result<()> {
                 &rec.timestamp
             };
             let status = if rec.fallback_succeeded { "ok" } else { "FAIL" };
-            let cmd_display = if rec.raw_command.len() > 40 {
-                format!("{}...", &rec.raw_command[..37])
-            } else {
-                rec.raw_command.clone()
-            };
+            // char-safe truncation (raw byte slice panics on multi-byte UTF-8).
+            let cmd_display = truncate(&rec.raw_command, 40);
             println!("  {} [{}] {}", ts_short, status, cmd_display);
         }
         println!();
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    //! Regression guard for the byte-slice truncation panic that lived in the
+    //! `--history` (`run`) and `show_failures` display paths.
+    //!
+    //! The old code did `if s.len() > N { format!("{}...", &s[..N-3]) }` — a
+    //! BYTE length check followed by a BYTE slice. When byte index `N-3` landed
+    //! in the middle of a multi-byte UTF-8 scalar (a non-ASCII branch name,
+    //! file path, or commit subject in a tracked command), `&s[..N-3]` panicked
+    //! with "byte index is not a char boundary". `rtk gain --history` / parse-
+    //! failure summaries crashed instead of printing. The fix routes all three
+    //! sites through `crate::core::utils::truncate`, which truncates by CHARS.
+    use crate::core::utils::truncate;
+
+    /// The three caps used at the call sites in this module.
+    const CAP_RTK_CMD: usize = 25; // run() --history
+    const CAP_TOP_CMD: usize = 50; // show_failures() top commands
+    const CAP_RAW_CMD: usize = 40; // show_failures() recent failures
+
+    /// A 2-byte char repeated long enough to overrun every cap. Because the
+    /// old caps' kept-prefix byte index (cap-3 = 22, 47, 37) is ODD, it can
+    /// never align with a 2-byte char boundary — so the old `&s[..cap-3]`
+    /// always sliced mid-scalar and panicked.
+    fn multibyte_overrun() -> String {
+        "λ".repeat(60) // 'λ' is 2 bytes; 60 of them = 120 bytes, 60 chars
+    }
+
+    #[test]
+    fn truncate_does_not_panic_on_multibyte_at_every_cap() {
+        // The pre-fix code panicked here. Reaching the assertions proves no panic.
+        for cap in [CAP_RTK_CMD, CAP_TOP_CMD, CAP_RAW_CMD] {
+            let s = multibyte_overrun();
+            let out = truncate(&s, cap);
+            // Result is exactly `cap` chars: (cap-3) kept + 3 for the ellipsis.
+            assert_eq!(
+                out.chars().count(),
+                cap,
+                "cap {cap}: truncated output must be exactly cap chars"
+            );
+            assert!(out.ends_with("..."), "cap {cap}: must keep ellipsis suffix");
+            // Every byte boundary is valid UTF-8 (String guarantees it; the
+            // point is we never sliced mid-scalar to build it).
+            assert!(out.is_char_boundary(out.len()));
+        }
+    }
+
+    #[test]
+    fn truncate_emoji_grapheme_does_not_split_scalar() {
+        // 4-byte scalars: byte index 22/37/47 is mid-emoji under the old code.
+        let s = "🔥".repeat(60); // 60 chars > cap, 4 bytes each
+        let out = truncate(&s, CAP_RAW_CMD);
+        assert_eq!(out.chars().count(), CAP_RAW_CMD);
+        // Kept portion is whole 🔥 scalars only — no replacement chars, no panic.
+        assert!(out.trim_end_matches("...").chars().all(|c| c == '🔥'));
+    }
+
+    #[test]
+    fn truncate_preserves_legacy_ascii_behavior() {
+        // Behavior parity with the old byte-slice path for ASCII input:
+        // old: len>25 -> first 22 bytes + "..."  ==  truncate(_, 25).
+        let ascii = "a".repeat(80); // longer than every cap so all paths truncate
+        assert_eq!(
+            truncate(&ascii, CAP_RTK_CMD),
+            format!("{}...", "a".repeat(22))
+        );
+        assert_eq!(
+            truncate(&ascii, CAP_RAW_CMD),
+            format!("{}...", "a".repeat(37))
+        );
+        assert_eq!(
+            truncate(&ascii, CAP_TOP_CMD),
+            format!("{}...", "a".repeat(47))
+        );
+    }
+
+    #[test]
+    fn truncate_leaves_short_strings_untouched() {
+        // Below the cap: returned verbatim, no ellipsis (matches the else arm).
+        assert_eq!(truncate("git status", CAP_RTK_CMD), "git status");
+        assert_eq!(truncate("λλλ", CAP_RAW_CMD), "λλλ");
+    }
 }
