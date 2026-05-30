@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
-use regex::Regex;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
+
+#[cfg(test)]
+use regex::Regex;
 
 pub trait StreamFilter {
     fn feed_line(&mut self, line: &str) -> Option<String>;
@@ -83,7 +85,50 @@ impl<H: BlockHandler> StreamFilter for BlockStreamFilter<H> {
     }
 }
 
-#[allow(dead_code)] // available for command modules; currently used in tests only
+/// Counterpart to [`BlockHandler`] for line-oriented streams.
+///
+/// Default behaviour is KEEP — every line is emitted unchanged. Implementors
+/// opt in to dropping noise via [`LineHandler::should_skip`] and may capture
+/// state for the final summary via [`LineHandler::observe_line`].
+pub trait LineHandler {
+    fn should_skip(&mut self, _line: &str) -> bool {
+        false
+    }
+
+    fn observe_line(&mut self, _line: &str) {}
+
+    fn format_summary(&self, exit_code: i32, raw: &str) -> Option<String>;
+}
+
+pub struct LineStreamFilter<H: LineHandler> {
+    handler: H,
+}
+
+impl<H: LineHandler> LineStreamFilter<H> {
+    pub fn new(handler: H) -> Self {
+        Self { handler }
+    }
+}
+
+impl<H: LineHandler> StreamFilter for LineStreamFilter<H> {
+    fn feed_line(&mut self, line: &str) -> Option<String> {
+        if self.handler.should_skip(line) {
+            return None;
+        }
+        self.handler.observe_line(line);
+        Some(format!("{}\n", line))
+    }
+
+    fn flush(&mut self) -> String {
+        String::new()
+    }
+
+    fn on_exit(&mut self, exit_code: i32, raw: &str) -> Option<String> {
+        self.handler.format_summary(exit_code, raw)
+    }
+}
+
+#[cfg(test)] // available for command modules; currently used in tests only
 pub struct RegexBlockFilter {
     start_re: Regex,
     skip_prefixes: Vec<String>,
@@ -91,6 +136,7 @@ pub struct RegexBlockFilter {
     block_count: usize,
 }
 
+#[cfg(test)]
 impl RegexBlockFilter {
     pub fn new(tool_name: &str, start_pattern: &str) -> Self {
         Self {
@@ -103,13 +149,11 @@ impl RegexBlockFilter {
         }
     }
 
-    #[allow(dead_code)]
     pub fn skip_prefix(mut self, prefix: &str) -> Self {
         self.skip_prefixes.push(prefix.to_string());
         self
     }
 
-    #[allow(dead_code)]
     pub fn skip_prefixes(mut self, prefixes: &[&str]) -> Self {
         self.skip_prefixes
             .extend(prefixes.iter().map(|s| s.to_string()));
@@ -117,6 +161,7 @@ impl RegexBlockFilter {
     }
 }
 
+#[cfg(test)]
 impl BlockHandler for RegexBlockFilter {
     fn should_skip(&mut self, line: &str) -> bool {
         self.skip_prefixes.iter().any(|p| line.starts_with(p))
@@ -152,30 +197,9 @@ pub trait StdinFilter: Send {
     fn flush(&mut self) -> String;
 }
 
-#[allow(dead_code)] // test utility: wraps closures as StreamFilter
-pub struct LineFilter<F: FnMut(&str) -> Option<String>> {
-    f: F,
-}
-
-#[allow(dead_code)]
-impl<F: FnMut(&str) -> Option<String>> LineFilter<F> {
-    pub fn new(f: F) -> Self {
-        Self { f }
-    }
-}
-
-impl<F: FnMut(&str) -> Option<String>> StreamFilter for LineFilter<F> {
-    fn feed_line(&mut self, line: &str) -> Option<String> {
-        (self.f)(line)
-    }
-
-    fn flush(&mut self) -> String {
-        String::new()
-    }
-}
-
 pub enum FilterMode<'a> {
     Streaming(Box<dyn StreamFilter + 'a>),
+    #[allow(dead_code)]
     Buffered(Box<dyn Fn(&str) -> String + 'a>),
     CaptureOnly,
     Passthrough,
@@ -197,7 +221,7 @@ pub struct StreamResult {
 }
 
 impl StreamResult {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn success(&self) -> bool {
         self.exit_code == 0
     }
@@ -305,6 +329,7 @@ pub fn run_streaming(
     let mut capped_out = false;
     let mut capped_err = false;
     let mut saved_filter: Option<Box<dyn StreamFilter + '_>> = None;
+    let mut filter_fd_is_stderr = false;
 
     if is_streaming {
         enum StreamLine {
@@ -333,15 +358,17 @@ pub fn run_streaming(
         if let FilterMode::Streaming(mut filter) = stdout_mode {
             let stdout_handle = io::stdout();
             let mut out = stdout_handle.lock();
+            let stderr_handle = io::stderr();
+            let mut err_out = stderr_handle.lock();
 
             for msg in rx {
                 let (line, is_stderr) = match msg {
-                    StreamLine::Stdout(l) => (l, false),
                     StreamLine::Stderr(l) => (l, true),
+                    StreamLine::Stdout(l) => (l, false),
                 };
                 if is_stderr {
                     if !capped_err {
-                        if raw_stderr.len() + line.len() + 1 <= RAW_CAP {
+                        if raw_stderr.len() + line.len() < RAW_CAP {
                             raw_stderr.push_str(&line);
                             raw_stderr.push('\n');
                         } else {
@@ -350,7 +377,7 @@ pub fn run_streaming(
                         }
                     }
                 } else if !capped_out {
-                    if raw_stdout.len() + line.len() + 1 <= RAW_CAP {
+                    if raw_stdout.len() + line.len() < RAW_CAP {
                         raw_stdout.push_str(&line);
                         raw_stdout.push('\n');
                     } else {
@@ -358,9 +385,11 @@ pub fn run_streaming(
                         eprintln!("[rtk] warning: stdout exceeds 10 MiB — filter input truncated");
                     }
                 }
+                filter_fd_is_stderr = is_stderr;
                 if let Some(output) = filter.feed_line(&line) {
                     filtered.push_str(&output);
-                    match write!(out, "{}", output) {
+                    let dest: &mut dyn Write = if is_stderr { &mut err_out } else { &mut out };
+                    match write!(dest, "{}", output) {
                         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => break,
                         Err(e) => return Err(e.into()),
                         Ok(_) => {}
@@ -369,7 +398,12 @@ pub fn run_streaming(
             }
             let tail = filter.flush();
             filtered.push_str(&tail);
-            match write!(io::stdout(), "{}", tail) {
+            let flush_dest: &mut dyn Write = if filter_fd_is_stderr {
+                &mut err_out
+            } else {
+                &mut out
+            };
+            match write!(flush_dest, "{}", tail) {
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
                 Err(e) => return Err(e.into()),
                 Ok(_) => {}
@@ -384,7 +418,7 @@ pub fn run_streaming(
             let mut raw_err = String::new();
             let mut capped = false;
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if raw_err.len() + line.len() + 1 <= RAW_CAP {
+                if raw_err.len() + line.len() < RAW_CAP {
                     raw_err.push_str(&line);
                     raw_err.push('\n');
                 } else if !capped {
@@ -403,7 +437,7 @@ pub fn run_streaming(
                 FilterMode::Streaming(_) => unreachable!("handled by is_streaming branch"),
                 FilterMode::Buffered(filter_fn) => {
                     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                        if raw_stdout.len() + line.len() + 1 <= RAW_CAP {
+                        if raw_stdout.len() + line.len() < RAW_CAP {
                             raw_stdout.push_str(&line);
                             raw_stdout.push('\n');
                         } else if !capped_out {
@@ -428,7 +462,7 @@ pub fn run_streaming(
                 }
                 FilterMode::CaptureOnly => {
                     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                        if raw_stdout.len() + line.len() + 1 <= RAW_CAP {
+                        if raw_stdout.len() + line.len() < RAW_CAP {
                             raw_stdout.push_str(&line);
                             raw_stdout.push('\n');
                         } else if !capped_out {
@@ -459,7 +493,12 @@ pub fn run_streaming(
     if let Some(mut f) = saved_filter {
         if let Some(post) = f.on_exit(exit_code, &raw) {
             filtered.push_str(&post);
-            match write!(io::stdout(), "{}", post) {
+            let mut dest: Box<dyn Write> = if filter_fd_is_stderr {
+                Box::new(io::stderr().lock())
+            } else {
+                Box::new(io::stdout().lock())
+            };
+            match write!(dest, "{}", post) {
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {}
                 Err(e) => return Err(e.into()),
                 Ok(_) => {}
@@ -506,6 +545,26 @@ pub fn exec_capture(cmd: &mut Command) -> Result<CaptureResult> {
 pub(crate) mod tests {
     use super::*;
     use std::process::Command;
+
+    struct LineFilter<F: FnMut(&str) -> Option<String>> {
+        f: F,
+    }
+
+    impl<F: FnMut(&str) -> Option<String>> LineFilter<F> {
+        pub fn new(f: F) -> Self {
+            Self { f }
+        }
+    }
+
+    impl<F: FnMut(&str) -> Option<String>> StreamFilter for LineFilter<F> {
+        fn feed_line(&mut self, line: &str) -> Option<String> {
+            (self.f)(line)
+        }
+
+        fn flush(&mut self) -> String {
+            String::new()
+        }
+    }
 
     #[test]
     fn test_exit_code_zero() {
@@ -601,6 +660,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_run_streaming_exit_code_preserved() {
+        // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exit 42"]);
         let result = run_streaming(&mut cmd, StdinMode::Null, FilterMode::Passthrough).unwrap();
@@ -665,6 +725,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_run_streaming_raw_cap_at_10mb() {
+        // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         // ~11 MiB of 80-char lines (fast: fewer lines than `yes | head -6M`)
         cmd.args([
@@ -685,6 +746,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_run_streaming_stderr_cap_at_10mb() {
+        // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         // ~11 MiB on stderr, nothing on stdout
         cmd.args([
@@ -751,6 +813,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_exec_capture_stderr() {
+        // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo err_msg >&2"]);
         let result = exec_capture(&mut cmd).unwrap();
@@ -759,6 +822,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_exec_capture_combined() {
+        // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo out_msg; echo err_msg >&2"]);
         let result = exec_capture(&mut cmd).unwrap();
@@ -904,7 +968,7 @@ pub(crate) mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn test_streaming_merges_stderr_through_filter() {
+    fn test_streaming_filters_both_fds_and_routes_to_correct_fd() {
         // nosemgrep: interpreter-execution
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo 'error[E0308]: type mismatch'; echo '   Compiling foo v1.0' >&2; echo '   Downloading bar v2.0' >&2; echo '   Finished dev' >&2; echo 'real error on stderr' >&2"]);
@@ -937,27 +1001,120 @@ pub(crate) mod tests {
         .unwrap();
 
         assert!(
+            result.filtered.contains("error[E0308]"),
+            "filtered should contain stdout errors, got: {}",
+            result.filtered
+        );
+        assert!(
             !result.filtered.contains("Compiling"),
-            "filtered output should not contain cargo noise, got: {}",
+            "cargo noise should be filtered out, got: {}",
             result.filtered
         );
         assert!(
             !result.filtered.contains("Downloading"),
-            "filtered output should not contain cargo noise, got: {}",
-            result.filtered
-        );
-        assert!(
-            result.filtered.contains("error[E0308]"),
-            "filtered output should contain real errors, got: {}",
+            "cargo noise should be filtered out, got: {}",
             result.filtered
         );
         assert!(
             result.raw_stderr.contains("Compiling"),
-            "raw_stderr should still capture noise for tracking"
+            "raw_stderr should capture all stderr lines"
         );
         assert!(
             result.raw_stderr.contains("real error on stderr"),
-            "raw_stderr should capture real errors"
+            "raw_stderr should capture all stderr lines"
         );
+    }
+
+    struct CountingLineHandler {
+        observed: Vec<String>,
+        skip_prefixes: Vec<String>,
+        summary_tag: &'static str,
+    }
+
+    impl LineHandler for CountingLineHandler {
+        fn should_skip(&mut self, line: &str) -> bool {
+            self.skip_prefixes.iter().any(|p| line.starts_with(p))
+        }
+
+        fn observe_line(&mut self, line: &str) {
+            self.observed.push(line.to_string());
+        }
+
+        fn format_summary(&self, exit_code: i32, _raw: &str) -> Option<String> {
+            Some(format!(
+                "{}: {} kept, exit={}\n",
+                self.summary_tag,
+                self.observed.len(),
+                exit_code
+            ))
+        }
+    }
+
+    fn run_line_filter(filter: &mut dyn StreamFilter, input: &str, exit_code: i32) -> String {
+        let mut out = String::new();
+        for line in input.lines() {
+            if let Some(s) = filter.feed_line(line) {
+                out.push_str(&s);
+            }
+        }
+        out.push_str(&filter.flush());
+        if let Some(post) = filter.on_exit(exit_code, input) {
+            out.push_str(&post);
+        }
+        out
+    }
+
+    #[test]
+    fn test_line_filter_defaults_keep_all() {
+        struct DefaultHandler;
+        impl LineHandler for DefaultHandler {
+            fn format_summary(&self, _: i32, _: &str) -> Option<String> {
+                None
+            }
+        }
+        let mut f = LineStreamFilter::new(DefaultHandler);
+        let result = run_line_filter(&mut f, "a\nb\nc\n", 0);
+        assert_eq!(result, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn test_line_filter_skip_drops_matching_lines() {
+        let handler = CountingLineHandler {
+            observed: Vec::new(),
+            skip_prefixes: vec!["NOISE:".to_string()],
+            summary_tag: "demo",
+        };
+        let mut f = LineStreamFilter::new(handler);
+        let input = "NOISE: progress 10%\nkeep me\nNOISE: progress 90%\nalso keep\n";
+        let result = run_line_filter(&mut f, input, 0);
+        assert!(!result.contains("NOISE:"), "got: {}", result);
+        assert!(result.contains("keep me\n"));
+        assert!(result.contains("also keep\n"));
+        assert!(result.contains("demo: 2 kept, exit=0\n"));
+    }
+
+    #[test]
+    fn test_line_filter_summary_propagates_exit_code() {
+        let handler = CountingLineHandler {
+            observed: Vec::new(),
+            skip_prefixes: Vec::new(),
+            summary_tag: "demo",
+        };
+        let mut f = LineStreamFilter::new(handler);
+        let result = run_line_filter(&mut f, "one\n", 42);
+        assert!(result.contains("exit=42"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_line_filter_observe_only_called_for_kept_lines() {
+        let handler = CountingLineHandler {
+            observed: Vec::new(),
+            skip_prefixes: vec!["DROP".to_string()],
+            summary_tag: "demo",
+        };
+        let mut f = LineStreamFilter::new(handler);
+        let result = run_line_filter(&mut f, "DROP a\nDROP b\nkeep\n", 0);
+        // Only "keep" was observed, so summary says "1 kept"
+        assert!(result.contains("demo: 1 kept"), "got: {}", result);
     }
 }

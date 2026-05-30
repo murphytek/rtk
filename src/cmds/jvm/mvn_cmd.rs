@@ -69,8 +69,9 @@ fn probe_mvn_version(command: &std::process::Command) -> Option<(u32, u32, u32)>
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    type VersionTriple = (u32, u32, u32);
     lazy_static::lazy_static! {
-        static ref CACHE: Mutex<HashMap<std::ffi::OsString, Option<(u32, u32, u32)>>> =
+        static ref CACHE: Mutex<HashMap<std::ffi::OsString, Option<VersionTriple>>> =
             Mutex::new(HashMap::new());
     }
 
