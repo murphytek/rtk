@@ -169,8 +169,17 @@ fn parse_ls_line(line: &str) -> Option<(char, u64, String)> {
 /// entries for "." (the directory itself) and ".." (its parent). These entries
 /// always appear in `ls -la` output and are skipped during parsing since they
 /// carry no meaningful content for token reduction.
+///
+/// The filename is the final whitespace-delimited token of the line. We compare
+/// that token exactly against "." / ".." — a loose `ends_with('.')` would also
+/// match (and silently drop) real entries whose names end in a dot, e.g. a file
+/// `report.` or a directory `build.`. The `.`/`..` names never contain spaces,
+/// so the last token is a safe, precise anchor.
 fn is_dotdir(line: &str) -> bool {
-    line.trim().ends_with('.') || line.trim().ends_with("..")
+    match line.split_whitespace().next_back() {
+        Some(name) => name == "." || name == "..",
+        None => false,
+    }
 }
 
 /// Parse ls -la output into compact format:
@@ -565,5 +574,46 @@ mod tests {
         assert_eq!(parsed_count, 0);
         assert!(entries.is_empty());
         assert!(summary.is_empty());
+    }
+
+    // Regression: a real entry whose name ends in '.' (e.g. a file "report." or a
+    // directory "build.") was misclassified as the "." / ".." dot-dir entry by the
+    // loose `ends_with('.')` heuristic and silently dropped from the listing.
+    #[test]
+    fn test_compact_keeps_file_named_with_trailing_dot() {
+        let input = "total 8\n\
+                     drwxr-xr-x  2 user  staff    64 Jan  1 12:00 .\n\
+                     drwxr-xr-x  2 user  staff    64 Jan  1 12:00 ..\n\
+                     -rw-r--r--  1 user  staff  1234 Jan  1 12:00 report.\n";
+        let (entries, _summary, parsed_count) = compact_ls(input, false);
+        assert_eq!(parsed_count, 1, "the 'report.' file must be parsed, not dropped");
+        assert!(
+            entries.contains("report."),
+            "file ending in '.' must not be dropped, got: {entries}"
+        );
+        assert!(!entries.contains("(empty)"));
+    }
+
+    #[test]
+    fn test_compact_keeps_dir_named_with_trailing_dot() {
+        let input = "total 8\n\
+                     drwxr-xr-x  2 user  staff    64 Jan  1 12:00 .\n\
+                     drwxr-xr-x  2 user  staff    64 Jan  1 12:00 ..\n\
+                     drwxr-xr-x  2 user  staff    64 Jan  1 12:00 build.\n";
+        let (entries, _summary, parsed_count) = compact_ls(input, false);
+        assert_eq!(parsed_count, 1, "the 'build.' dir must be parsed, not dropped");
+        assert!(
+            entries.contains("build./"),
+            "dir ending in '.' must not be dropped, got: {entries}"
+        );
+    }
+
+    #[test]
+    fn test_is_dotdir_only_matches_dot_entries() {
+        assert!(is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 ."));
+        assert!(is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 .."));
+        // A real filename that merely ends in a dot is NOT a dot-dir entry.
+        assert!(!is_dotdir("-rw-r--r--  1 user staff 12 Jan  1 12:00 report."));
+        assert!(!is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 build."));
     }
 }
