@@ -5,6 +5,16 @@ All notable changes to rtk (Rust Token Killer) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.1](https://github.com/murphytek/rtk/compare/v0.37.0...v0.37.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* **grep:** treat bare `|` as literal pipe (BRE), not rg alternation ([#6](https://github.com/murphytek/rtk/issues/6)) ([f30963e](https://github.com/murphytek/rtk/commit/f30963ee2f93bce9e14f96b3dc9793e1be5bad57))
+* **read:** keep true file line numbers under --tail-lines -n ([#12](https://github.com/murphytek/rtk/issues/12)) ([95d20f1](https://github.com/murphytek/rtk/commit/95d20f15fca75a0f351e01d958e3b31cef0d1b27))
+* **tree:** stop dropping entries whose names contain 'director'+'file' ([#9](https://github.com/murphytek/rtk/issues/9)) ([d898926](https://github.com/murphytek/rtk/commit/d89892670f1c6f0a7cc6c5a9914e9e4d26c949a9))
+* **wc:** preserve filenames containing spaces in wc filter ([#8](https://github.com/murphytek/rtk/issues/8)) ([54b1216](https://github.com/murphytek/rtk/commit/54b12168b763d351290d9f873d9825a4a14a8ccf))
+
 ## [0.37.0](https://github.com/murphytek/rtk/compare/v0.36.0...v0.37.0) (2026-05-01)
 
 
