@@ -627,6 +627,15 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
+        pattern: r"^(?:\./gradlew|gradlew\.bat|gradlew|gradle)(?:\s+(test|build|clean|assemble\w*|install\w*|check|lint\w*|dependencies))?(\s|$)",
+        rtk_cmd: "rtk gradlew",
+        rewrite_prefixes: &["./gradlew", "gradlew.bat", "gradlew", "gradle"],
+        category: "Build",
+        savings_pct: 75.0,
+        subcmd_savings: &[("test", 90.0), ("build", 80.0), ("check", 80.0)],
+        subcmd_status: &[],
+    },
+    RtkRule {
         pattern: r"^hadolint\b",
         rtk_cmd: "rtk hadolint",
         rewrite_prefixes: &["hadolint"],
@@ -871,21 +880,12 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
-    // JVM-GRADLE BEGIN
-    RtkRule {
-        // Matches `gradle ...`, `./gradlew ...` and `gradlew ...`
-        // (strip_absolute_path normalizes `./gradlew` → `gradlew` for classify,
-        // but rewrite_segment uses the un-normalized cmd, so both prefixes are
-        // listed in rewrite_prefixes below).
-        pattern: r"^(?:gradle|gradlew)\s+(build|test|assemble|clean|check|bootRun)\b",
-        rtk_cmd: "rtk gradle",
-        rewrite_prefixes: &["./gradlew", "gradlew", "gradle"],
-        category: "Build",
-        savings_pct: 75.0,
-        subcmd_savings: &[],
-        subcmd_status: &[],
-    },
-    // JVM-GRADLE END
+    // JVM-GRADLE: upstream's `gradlew` rewrite rule (above) supersedes murphytek's
+    // earlier `rtk gradle` rewrite. The richer upstream `rtk gradlew` command
+    // (Android tasks, lint/ktlint/detekt, Windows shims) now owns the auto-rewrite
+    // of bare `gradle`/`gradlew` invocations. The explicit `rtk gradle` subcommand
+    // remains available for direct use, but is no longer auto-routed here to avoid a
+    // duplicate-rule collision (RegexSet last-match-wins).
     // JVM-ANT BEGIN
     RtkRule {
         pattern: r"^ant\s+(build|clean|test|compile|package|install)\b",
