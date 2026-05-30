@@ -125,6 +125,41 @@ fn filter_wc_output(raw: &str, mode: &WcMode) -> String {
     format_multi_line(&lines, mode)
 }
 
+/// Split a wc output line into its leading numeric count columns and the
+/// trailing filename (if any).
+///
+/// `wc` prints `<count> [count...] <filename>` where the filename is emitted
+/// verbatim and MAY contain spaces (e.g. `30 my file.txt`). Naive
+/// `split_whitespace()` would shatter such names, so callers must split off a
+/// known number of count columns and treat the remainder as one opaque name.
+///
+/// `max_counts` is the most count columns the mode can have. We consume up to
+/// that many *leading* tokens that parse as unsigned integers; the first
+/// non-numeric token marks the start of the filename, and the filename is
+/// returned with its internal spacing preserved.
+///
+/// Returns `(counts, name)`. `name` is `None` for count-only lines (stdin,
+/// or the `total` summary line which the caller handles separately).
+fn split_counts_and_name(line: &str, max_counts: usize) -> (Vec<&str>, Option<&str>) {
+    let trimmed = line.trim_start();
+    let mut counts = Vec::new();
+    let mut rest = trimmed;
+
+    while counts.len() < max_counts {
+        // Peel one whitespace-delimited token off the front.
+        let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let token = &rest[..token_end];
+        if token.is_empty() || token.parse::<u64>().is_err() {
+            break;
+        }
+        counts.push(token);
+        rest = rest[token_end..].trim_start();
+    }
+
+    let name = if rest.is_empty() { None } else { Some(rest) };
+    (counts, name)
+}
+
 /// Format a single wc output line (one file or stdin)
 fn format_single_line(line: &str, mode: &WcMode) -> String {
     let parts: Vec<&str> = line.split_whitespace().collect();
@@ -142,16 +177,15 @@ fn format_single_line(line: &str, mode: &WcMode) -> String {
             }
         }
         WcMode::Mixed => {
-            // Strip file path, keep numbers only
-            if parts.len() >= 2 {
-                let last_is_path = parts.last().is_some_and(|p| p.parse::<u64>().is_err());
-                if last_is_path {
-                    parts[..parts.len() - 1].join(" ")
-                } else {
-                    parts.join(" ")
-                }
-            } else {
+            // Strip the (possibly space-containing) filename, keep counts only.
+            // Mixed can have up to 4 count columns (-lwcm); peel the numeric
+            // prefix off the front rather than guessing from the last token,
+            // which mis-handles names like `my file.txt`.
+            let (counts, _name) = split_counts_and_name(line, 4);
+            if counts.is_empty() {
                 line.trim().to_string()
+            } else {
+                counts.join(" ")
             }
         }
     }
@@ -161,68 +195,69 @@ fn format_single_line(line: &str, mode: &WcMode) -> String {
 fn format_multi_line(lines: &[&str], mode: &WcMode) -> String {
     let mut result = Vec::new();
 
-    // Find common directory prefix to shorten paths
+    // Max count columns this mode emits (Mixed can be up to -lwcm = 4).
+    let max_counts = match mode {
+        WcMode::Lines | WcMode::Words | WcMode::Bytes | WcMode::Chars => 1,
+        WcMode::Full => 3,
+        WcMode::Mixed => 4,
+    };
+
+    // Find common directory prefix to shorten paths. Filenames may contain
+    // spaces, so split off the numeric prefix and take the verbatim remainder
+    // as the name rather than grabbing the last whitespace token.
     let paths: Vec<&str> = lines
         .iter()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            parts.last().copied()
-        })
+        .filter_map(|line| split_counts_and_name(line, max_counts).1)
         .filter(|p| *p != "total")
         .collect();
 
     let common_prefix = find_common_prefix(&paths);
 
     for line in lines {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
+        let (counts, name) = split_counts_and_name(line, max_counts);
+        if counts.is_empty() && name.is_none() {
             continue;
         }
 
-        let is_total = parts.last().is_some_and(|p| *p == "total");
+        let is_total = name == Some("total");
+        let stripped_name = name.map(|n| strip_prefix(n, &common_prefix));
 
         match mode {
             WcMode::Lines | WcMode::Words | WcMode::Bytes | WcMode::Chars => {
+                let count = counts.first().copied().unwrap_or("0");
                 if is_total {
-                    result.push(format!("Σ {}", parts.first().unwrap_or(&"0")));
+                    result.push(format!("Σ {}", count));
+                } else if let Some(name) = stripped_name {
+                    result.push(format!("{} {}", count, name));
                 } else {
-                    let name = strip_prefix(parts.last().unwrap_or(&""), &common_prefix);
-                    result.push(format!("{} {}", parts.first().unwrap_or(&"0"), name));
+                    result.push(count.to_string());
                 }
             }
             WcMode::Full => {
+                let c0 = counts.first().copied().unwrap_or("0");
+                let c1 = counts.get(1).copied().unwrap_or("0");
+                let c2 = counts.get(2).copied().unwrap_or("0");
                 if is_total {
-                    result.push(format!(
-                        "Σ {}L {}W {}B",
-                        parts.first().unwrap_or(&"0"),
-                        parts.get(1).unwrap_or(&"0"),
-                        parts.get(2).unwrap_or(&"0"),
-                    ));
-                } else if parts.len() >= 4 {
-                    let name = strip_prefix(parts[3], &common_prefix);
-                    result.push(format!(
-                        "{}L {}W {}B {}",
-                        parts[0], parts[1], parts[2], name
-                    ));
+                    result.push(format!("Σ {}L {}W {}B", c0, c1, c2));
+                } else if counts.len() >= 3 {
+                    if let Some(name) = stripped_name {
+                        result.push(format!("{}L {}W {}B {}", c0, c1, c2, name));
+                    } else {
+                        result.push(format!("{}L {}W {}B", c0, c1, c2));
+                    }
                 } else {
                     result.push(line.trim().to_string());
                 }
             }
             WcMode::Mixed => {
                 if is_total {
-                    let nums: Vec<&str> = parts[..parts.len() - 1].to_vec();
-                    result.push(format!("Σ {}", nums.join(" ")));
-                } else if parts.len() >= 2 {
-                    let last_is_path = parts.last().is_some_and(|p| p.parse::<u64>().is_err());
-                    if last_is_path {
-                        let name = strip_prefix(parts.last().unwrap_or(&""), &common_prefix);
-                        let nums: Vec<&str> = parts[..parts.len() - 1].to_vec();
-                        result.push(format!("{} {}", nums.join(" "), name));
-                    } else {
-                        result.push(parts.join(" "));
-                    }
-                } else {
+                    result.push(format!("Σ {}", counts.join(" ")));
+                } else if counts.is_empty() {
                     result.push(line.trim().to_string());
+                } else if let Some(name) = stripped_name {
+                    result.push(format!("{} {}", counts.join(" "), name));
+                } else {
+                    result.push(counts.join(" "));
                 }
             }
         }
@@ -374,5 +409,126 @@ mod tests {
         let raw = "";
         let result = filter_wc_output(raw, &WcMode::Full);
         assert_eq!(result, "");
+    }
+
+    // --- filenames containing spaces (regression: split_whitespace mangled them) ---
+    //
+    // GNU wc prints the filename verbatim, so `wc -l "my file.txt"` emits
+    // `3 my file.txt`. The model reads this output and decides which file to
+    // act on; silently dropping part of the name (or chopping it to the last
+    // path segment) corrupts that decision. These tests pin the verbatim name.
+
+    #[test]
+    fn test_single_file_full_name_with_spaces() {
+        let raw = "      30      96     978 my file.txt\n";
+        let result = filter_wc_output(raw, &WcMode::Full);
+        // Full single-file mode drops the name by design, but it must not
+        // mis-parse the counts when extra space-separated tokens follow.
+        assert_eq!(result, "30L 96W 978B");
+    }
+
+    #[test]
+    fn test_multi_file_lines_name_with_spaces() {
+        let raw = "      30 my file.txt\n      50 other one.txt\n      80 total\n";
+        let result = filter_wc_output(raw, &WcMode::Lines);
+        // No common prefix, so the full name must survive intact.
+        assert_eq!(result, "30 my file.txt\n50 other one.txt\nΣ 80");
+    }
+
+    #[test]
+    fn test_multi_file_full_name_with_spaces() {
+        let raw = "      30      96     978 my file.txt\n      50     120    1500 other one.txt\n      80     216    2478 total\n";
+        let result = filter_wc_output(raw, &WcMode::Full);
+        assert_eq!(
+            result,
+            "30L 96W 978B my file.txt\n50L 120W 1500B other one.txt\nΣ 80L 216W 2478B"
+        );
+    }
+
+    #[test]
+    fn test_multi_file_full_name_with_spaces_common_prefix() {
+        // Common dir prefix is stripped, but the spaced basename stays whole.
+        let raw = "      30      96     978 src/my file.txt\n      50     120    1500 src/other one.txt\n      80     216    2478 total\n";
+        let result = filter_wc_output(raw, &WcMode::Full);
+        assert_eq!(
+            result,
+            "30L 96W 978B my file.txt\n50L 120W 1500B other one.txt\nΣ 80L 216W 2478B"
+        );
+    }
+
+    #[test]
+    fn test_multi_file_lines_common_prefix_with_spaces() {
+        let raw = "      30 src/my file.txt\n      50 src/other one.txt\n      80 total\n";
+        let result = filter_wc_output(raw, &WcMode::Lines);
+        assert_eq!(result, "30 my file.txt\n50 other one.txt\nΣ 80");
+    }
+
+    #[test]
+    fn test_mixed_single_name_with_spaces() {
+        // -lw on a spaced filename: two count columns then the verbatim name.
+        let raw = "      30      96 my file.txt\n";
+        let result = filter_wc_output(raw, &WcMode::Mixed);
+        // Mixed single-line strips the path entirely, keeping only the counts;
+        // it must not leave a dangling fragment of the filename.
+        assert_eq!(result, "30 96");
+    }
+
+    // --- split_counts_and_name helper contract ---
+
+    #[test]
+    fn test_split_counts_single_column() {
+        let (counts, name) = split_counts_and_name("      30 my file.txt", 1);
+        assert_eq!(counts, vec!["30"]);
+        assert_eq!(name, Some("my file.txt"));
+    }
+
+    #[test]
+    fn test_split_counts_full_columns() {
+        let (counts, name) = split_counts_and_name("  30  96  978 my file.txt", 3);
+        assert_eq!(counts, vec!["30", "96", "978"]);
+        assert_eq!(name, Some("my file.txt"));
+    }
+
+    #[test]
+    fn test_split_counts_stdin_no_name() {
+        // No filename (stdin): all tokens are counts, name is None.
+        let (counts, name) = split_counts_and_name("      30      96     978", 3);
+        assert_eq!(counts, vec!["30", "96", "978"]);
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_split_counts_stops_at_count_cap() {
+        // Even if more numeric-looking tokens follow, never consume more than
+        // the mode's column count — the extras belong to the filename.
+        let (counts, name) = split_counts_and_name("30 123 456", 1);
+        assert_eq!(counts, vec!["30"]);
+        assert_eq!(name, Some("123 456"));
+    }
+
+    #[test]
+    fn test_split_counts_total_line() {
+        let (counts, name) = split_counts_and_name("      80 total", 1);
+        assert_eq!(counts, vec!["80"]);
+        assert_eq!(name, Some("total"));
+    }
+
+    #[test]
+    fn test_split_counts_trailing_space_in_name() {
+        // Tabs/extra spaces between counts and a spaced name must not leak
+        // into either side.
+        let (counts, name) = split_counts_and_name("  5  10 dir/a b.txt", 2);
+        assert_eq!(counts, vec!["5", "10"]);
+        assert_eq!(name, Some("dir/a b.txt"));
+    }
+
+    #[test]
+    fn test_mixed_multi_name_with_spaces() {
+        let raw = "      30      96 my file.txt\n      50     120 other one.txt\n      80     216 total\n";
+        let result = filter_wc_output(raw, &WcMode::Mixed);
+        assert_eq!(
+            result,
+            "30 96 my file.txt\n50 120 other one.txt\nΣ 80 216"
+        );
     }
 }
