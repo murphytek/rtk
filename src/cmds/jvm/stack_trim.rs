@@ -172,11 +172,6 @@ pub fn trim_stack_noise(input: &str) -> String {
 mod tests {
     use super::*;
 
-    // --- helper ---
-    fn lines_of(s: &str) -> Vec<&str> {
-        s.lines().collect()
-    }
-
     #[test]
     fn ten_groovy_frames_collapse_user_frame_preserved() {
         let input = "\
