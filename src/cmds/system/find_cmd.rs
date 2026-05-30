@@ -6,6 +6,27 @@ use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Abbreviate a directory path for display, keeping a leading `...` ellipsis.
+///
+/// When the path exceeds 50 characters it is shortened to `...` + its last 47
+/// characters. The slicing is done on **character** boundaries (not raw byte
+/// offsets) so paths containing multibyte UTF-8 (accented, CJK, emoji, etc.)
+/// never panic. For pure-ASCII paths a character is one byte, so this produces
+/// byte-for-byte identical output to the original `&dir[dir.len() - 47..]` form.
+fn abbreviate_dir(dir: &str) -> String {
+    // Use char count, not byte length, as the width threshold so the limit
+    // reflects visible characters rather than UTF-8 encoding size.
+    if dir.chars().count() > 50 {
+        // Take the last 47 characters, char-boundary safe.
+        let mut tail: Vec<char> = dir.chars().rev().take(47).collect();
+        tail.reverse();
+        let tail: String = tail.into_iter().collect();
+        format!("...{}", tail)
+    } else {
+        dir.to_string()
+    }
+}
+
 /// Match a filename against a glob pattern (supports `*` and `?`).
 fn glob_match(pattern: &str, name: &str) -> bool {
     glob_match_inner(pattern.as_bytes(), name.as_bytes())
@@ -322,11 +343,7 @@ pub fn run(
         }
 
         let files_in_dir = &by_dir[dir];
-        let dir_display = if dir.len() > 50 {
-            format!("...{}", &dir[dir.len() - 47..])
-        } else {
-            dir.clone()
-        };
+        let dir_display = abbreviate_dir(dir);
 
         let remaining_budget = max_results - shown;
         if files_in_dir.len() <= remaining_budget {
@@ -607,6 +624,118 @@ mod tests {
         // With max=2, should not error
         let result = run("*.rs", "src", 2, None, "f", false, 0);
         assert!(result.is_ok());
+    }
+
+    // --- abbreviate_dir: UTF-8 char-boundary safety (regression) ---
+
+    /// A directory path whose 50-byte truncation point lands INSIDE a multibyte
+    /// UTF-8 character must not panic. The original `&dir[dir.len() - 47..]`
+    /// slice panicked with "byte index N is not a char boundary" on such paths,
+    /// crashing `rtk find` on any legitimate path containing emoji/accented/CJK
+    /// characters near the abbreviation boundary.
+    #[test]
+    fn abbreviate_dir_emoji_at_boundary_no_panic() {
+        // "dd" + 🎉 (4-byte emoji) + 45 ASCII bytes => len 51.
+        // dir.len() - 47 == 4, which falls inside the emoji (bytes 2..6).
+        // This is the exact byte offset that panicked pre-fix.
+        let dir = format!("dd{}{}", '🎉', "a".repeat(45));
+        assert_eq!(dir.len(), 51);
+        assert!(
+            !dir.is_char_boundary(dir.len() - 47),
+            "test setup: cut point must straddle the emoji to exercise the bug"
+        );
+        // Must not panic.
+        let out = abbreviate_dir(&dir);
+        // Result must be valid UTF-8 (it is, by type) and contain the emoji intact.
+        assert!(out.contains('🎉'), "emoji should survive abbreviation: {out}");
+    }
+
+    /// Several multibyte paths of varying lengths must all abbreviate without
+    /// panicking, including accented (2-byte), CJK (3-byte), and emoji (4-byte).
+    #[test]
+    fn abbreviate_dir_multibyte_variants_no_panic() {
+        let cases = [
+            "café/".repeat(20),          // 2-byte chars
+            "目录/".repeat(20),          // 3-byte CJK chars
+            "🎉/".repeat(20),            // 4-byte emoji
+            format!("d{}{}", '🎉', "a".repeat(46)),
+            format!("dd{}{}", '🎉', "a".repeat(46)),
+            format!("ddd{}{}", '🎉', "a".repeat(46)),
+        ];
+        for dir in &cases {
+            // Just calling it must not panic; also assert it returned a String
+            // no longer than ~50 visible chars + ellipsis.
+            let out = abbreviate_dir(dir);
+            assert!(out.chars().count() <= 50, "abbreviated too long: {out}");
+        }
+    }
+
+    /// ASCII output must be byte-for-byte identical to the original
+    /// `&dir[dir.len() - 47..]` behavior — the fix must not change ASCII paths.
+    #[test]
+    fn abbreviate_dir_ascii_unchanged() {
+        // Reference: the exact slicing the original code performed for ASCII.
+        fn original_ascii(dir: &str) -> String {
+            if dir.len() > 50 {
+                format!("...{}", &dir[dir.len() - 47..])
+            } else {
+                dir.to_string()
+            }
+        }
+        let a50 = "a".repeat(50);
+        let a51 = "a".repeat(51);
+        let a60 = "a".repeat(60);
+        let cases: [&str; 6] = [
+            "src",
+            "src/cmds/system",
+            &a50, // exactly at threshold (not abbreviated)
+            &a51, // just over threshold (abbreviated)
+            &a60,
+            "deep/nested/directory/structure/that/is/quite/long/indeed/here",
+        ];
+        for dir in cases {
+            assert_eq!(
+                abbreviate_dir(dir),
+                original_ascii(dir),
+                "ASCII abbreviation changed for {dir:?}"
+            );
+        }
+    }
+
+    /// Short multibyte paths (<= 50 chars) are returned verbatim.
+    #[test]
+    fn abbreviate_dir_short_multibyte_verbatim() {
+        let dir = "café/目录/🎉";
+        assert_eq!(abbreviate_dir(dir), dir);
+    }
+
+    /// End-to-end: `run()` over a directory tree containing a multibyte path must
+    /// not panic. Pre-fix this crashed inside the display loop.
+    #[test]
+    fn run_multibyte_path_no_panic() {
+        use std::fs;
+        let base = std::env::temp_dir().join(format!(
+            "rtk_find_utf8_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Build a directory whose path is long enough to be abbreviated AND
+        // straddles a multibyte char at the cut point.
+        let deep = base
+            .join("dd🎉aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .join("sub");
+        fs::create_dir_all(&deep).expect("create dirs");
+        fs::write(deep.join("target.rs"), b"// test\n").expect("write file");
+
+        let result = run("*.rs", base.to_str().unwrap(), 50, None, "f", false, 0);
+
+        // Cleanup before asserting so a failure doesn't leak the temp tree.
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(result.is_ok(), "run over a multibyte path should not error/panic");
     }
 
     #[test]
