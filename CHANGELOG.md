@@ -5,6 +5,17 @@ All notable changes to rtk (Rust Token Killer) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.1](https://github.com/murphytek/rtk/compare/v0.42.0...v0.42.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* **ci:** fall back to GITHUB_TOKEN when GitHub App secrets are absent ([#18](https://github.com/murphytek/rtk/issues/18)) ([0a9f47a](https://github.com/murphytek/rtk/commit/0a9f47ac69dcacfd6a98a89397fb1529185bd772))
+* **find:** UTF-8-safe directory path abbreviation ([#10](https://github.com/murphytek/rtk/issues/10)) ([eb70ed9](https://github.com/murphytek/rtk/commit/eb70ed91dc21d87c93311e7f06ac8cdfc2e48b1c))
+* **gain:** char-safe truncation in gain history & failure summaries ([#15](https://github.com/murphytek/rtk/issues/15)) ([59e592d](https://github.com/murphytek/rtk/commit/59e592d2572beede3448600c57096b7b34d7a94b))
+* **log:** truncate displayed messages by char count, not byte length ([#14](https://github.com/murphytek/rtk/issues/14)) ([d546a9a](https://github.com/murphytek/rtk/commit/d546a9ab18f49f32d65465b98b951328e3d61a3c))
+* **ls:** stop dropping entries whose names end in '.' ([#13](https://github.com/murphytek/rtk/issues/13)) ([690dc16](https://github.com/murphytek/rtk/commit/690dc166c5a1401e2d9d3b06e726ce9381fcaea0))
+
 ## [0.37.0](https://github.com/murphytek/rtk/compare/v0.36.0...v0.37.0) (2026-05-01)
 ## [0.42.0](https://github.com/rtk-ai/rtk/compare/v0.41.0...v0.42.0) (2026-05-24)
 
