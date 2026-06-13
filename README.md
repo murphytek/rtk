@@ -7,9 +7,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rtk-ai/rtk/actions"><img src="https://github.com/rtk-ai/rtk/workflows/Security%20Check/badge.svg" alt="CI"></a>
-  <a href="https://github.com/rtk-ai/rtk/releases"><img src="https://img.shields.io/github/v/release/rtk-ai/rtk" alt="Release"></a>
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://github.com/murphytek/rtk/actions"><img src="https://github.com/murphytek/rtk/workflows/Security%20Check/badge.svg" alt="CI"></a>
+  <a href="https://github.com/murphytek/rtk/releases"><img src="https://img.shields.io/github/v/release/murphytek/rtk" alt="Release"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://discord.gg/RySmvNF5kF"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord" alt="Discord"></a>
   <a href="https://formulae.brew.sh/formula/rtk"><img src="https://img.shields.io/homebrew/v/rtk" alt="Homebrew"></a>
 </p>
@@ -66,7 +66,7 @@ brew install rtk
 ### Quick Install (Linux/macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/murphytek/rtk/refs/heads/master/install.sh | sh
 ```
 
 > Installs to `~/.local/bin`. Add to PATH if needed:
@@ -77,22 +77,35 @@ curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/instal
 ### Cargo
 
 ```bash
-cargo install --git https://github.com/rtk-ai/rtk
+cargo install --git https://github.com/murphytek/rtk
 ```
 
 ### Pre-built Binaries
 
-Download from [releases](https://github.com/rtk-ai/rtk/releases):
-- macOS: `rtk-x86_64-apple-darwin.tar.gz` / `rtk-aarch64-apple-darwin.tar.gz`
-- Linux: `rtk-x86_64-unknown-linux-musl.tar.gz` / `rtk-aarch64-unknown-linux-gnu.tar.gz`
-- Windows: `rtk-x86_64-pc-windows-msvc.zip`
+Download from [releases](https://github.com/murphytek/rtk/releases/latest):
+
+```bash
+# Linux x86_64
+curl -L https://github.com/murphytek/rtk/releases/latest/download/rtk-x86_64-unknown-linux-musl.tar.gz | tar xz
+
+# Linux aarch64
+curl -L https://github.com/murphytek/rtk/releases/latest/download/rtk-aarch64-unknown-linux-gnu.tar.gz | tar xz
+
+# macOS Intel
+curl -L https://github.com/murphytek/rtk/releases/latest/download/rtk-x86_64-apple-darwin.tar.gz | tar xz
+
+# macOS Apple Silicon
+curl -L https://github.com/murphytek/rtk/releases/latest/download/rtk-aarch64-apple-darwin.tar.gz | tar xz
+```
+
+- Windows: download `rtk-x86_64-pc-windows-msvc.zip` from [releases/latest](https://github.com/murphytek/rtk/releases/latest)
 
 > **Windows users**: Extract the zip and place `rtk.exe` somewhere in your PATH (e.g. `C:\Users\<you>\.local\bin`). Run RTK from **Command Prompt**, **PowerShell**, or **Windows Terminal** — do not double-click the `.exe` (it will flash and close). For the best experience, use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) where the full hook system works natively. See [Windows setup](#windows) below for details.
 
 ### Verify Installation
 
 ```bash
-rtk --version   # Should show "rtk 0.28.2"
+rtk --version   # Should show current version (e.g. "rtk 0.35.0")
 rtk gain        # Should show token savings stats
 ```
 
@@ -477,7 +490,7 @@ export RTK_TELEMETRY_DISABLED=1   # Blocks telemetry regardless of consent
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/rtk-ai/rtk).
+Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/murphytek/rtk).
 
 Join the community on [Discord](https://discord.gg/RySmvNF5kF).
 
