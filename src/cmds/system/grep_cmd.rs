@@ -1,12 +1,12 @@
 //! Filters grep output by grouping matches by file.
 
 use crate::core::config;
+use crate::core::stream::exec_capture;
 use crate::core::tracking;
-use crate::core::utils::{exit_code_from_output, resolved_command};
+use crate::core::utils::resolved_command;
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::collections::HashMap;
-use std::process::Stdio;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -25,13 +25,21 @@ pub fn run(
         eprintln!("grep: '{}' in {}", pattern, path);
     }
 
-    // Fix: convert BRE alternation \| → | for rg (which uses PCRE-style regex)
-    let rg_pattern = pattern.replace(r"\|", "|");
+    // Translate grep BRE pipe semantics to rg's default (Rust regex / ERE-like) engine.
+    // In grep BRE: `\|` is alternation, a bare `|` is a LITERAL pipe.
+    // In rg default: `|` is alternation, `\|` is a LITERAL pipe — i.e. the two are SWAPPED.
+    // The previous code only rewrote `\|` → `|`, which silently left a bare `|` to be
+    // re-interpreted by rg as alternation. So `rtk grep 'a|b'` (grep user wanting the
+    // literal string "a|b") over-matched: rg returned every line containing `a` OR `b`,
+    // feeding extra false matches to the caller. We must swap BOTH directions.
+    let rg_pattern = translate_bre_pipes(pattern);
 
     let mut rg_cmd = resolved_command("rg");
-    rg_cmd
-        .args(["-n", "--no-heading", &rg_pattern, path])
-        .stdin(Stdio::null());
+    // --no-ignore-vcs: match grep -r behavior (don't skip .gitignore'd files).
+    // Without this, rg returns 0 matches for files in .gitignore, causing
+    // false negatives that make AI agents draw wrong conclusions.
+    // Using --no-ignore-vcs (not --no-ignore) so .ignore/.rgignore are still respected.
+    rg_cmd.args(["-n", "--no-heading", "--no-ignore-vcs", &rg_pattern, path]);
 
     if let Some(ft) = file_type {
         rg_cmd.arg("--type").arg(ft);
@@ -45,28 +53,42 @@ pub fn run(
         rg_cmd.arg(arg);
     }
 
-    let output = rg_cmd
-        .output()
+    let result = exec_capture(&mut rg_cmd)
         .or_else(|_| {
-            resolved_command("grep")
-                .args(["-rn", pattern, path])
-                .stdin(Stdio::null())
-                .output()
+            let mut grep_cmd = resolved_command("grep");
+            //When we fall back to grep,include all args, not just -rn.
+            grep_cmd.args(["-rn", pattern, path]).args(extra_args);
+            exec_capture(&mut grep_cmd)
         })
         .context("grep/rg failed")?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let exit_code = exit_code_from_output(&output, "grep");
+    // Passthrough output flags that produce output that is already small.
+    if has_format_flag(extra_args) {
+        print!("{}", result.stdout);
+        if !result.stderr.is_empty() {
+            eprint!("{}", result.stderr.trim());
+        }
 
-    let raw_output = stdout.to_string();
+        let args_display = if extra_args.is_empty() {
+            format!("'{}' {}", pattern, path)
+        } else {
+            format!("{} '{}' {}", extra_args.join(" "), pattern, path)
+        };
 
-    if stdout.trim().is_empty() {
+        timer.track_passthrough(
+            &format!("grep {}", args_display),
+            &format!("rtk grep {} (passthrough)", args_display),
+        );
+        return Ok(result.exit_code);
+    }
+
+    let exit_code = result.exit_code;
+    let raw_output = result.stdout.clone();
+
+    if result.stdout.trim().is_empty() {
         // Show stderr for errors (bad regex, missing file, etc.)
-        if exit_code == 2 {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.trim().is_empty() {
-                eprintln!("{}", stderr.trim());
-            }
+        if exit_code == 2 && !result.stderr.trim().is_empty() {
+            eprintln!("{}", result.stderr.trim());
         }
         let msg = format!("0 matches for '{}'", pattern);
         println!("{}", msg);
@@ -79,17 +101,19 @@ pub fn run(
         return Ok(exit_code);
     }
 
-    let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
-    let mut total = 0;
+    // Always filter: truncate long lines, apply per-file and global caps.
+    // Output in standard file:line:content format that AI agents can parse.
+    // (A passthrough approach yields 0% savings — no reason for RTK to exist on that path.)
+    let total_matches = result.stdout.lines().count();
 
-    // Compile context regex once (instead of per-line in clean_line)
     let context_re = if context_only {
         Regex::new(&format!("(?i).{{0,20}}{}.*", regex::escape(pattern))).ok()
     } else {
         None
     };
 
-    for line in stdout.lines() {
+    let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for line in result.stdout.lines() {
         let parts: Vec<&str> = line.splitn(3, ':').collect();
 
         let (file, line_num, content) = if parts.len() == 3 {
@@ -102,43 +126,39 @@ pub fn run(
             continue;
         };
 
-        total += 1;
         let cleaned = clean_line(content, max_line_len, context_re.as_ref(), pattern);
         by_file.entry(file).or_default().push((line_num, cleaned));
     }
 
     let mut rtk_output = String::new();
-    rtk_output.push_str(&format!("{} matches in {}F:\n\n", total, by_file.len()));
+    rtk_output.push_str(&format!(
+        "{} matches in {} files:\n\n",
+        total_matches,
+        by_file.len()
+    ));
 
     let mut shown = 0;
     let mut files: Vec<_> = by_file.iter().collect();
     files.sort_by_key(|(f, _)| *f);
 
+    let per_file = config::limits().grep_max_per_file;
     for (file, matches) in files {
         if shown >= max_results {
             break;
         }
 
         let file_display = compact_path(file);
-        rtk_output.push_str(&format!("[file] {} ({}):\n", file_display, matches.len()));
-
-        let per_file = config::limits().grep_max_per_file;
         for (line_num, content) in matches.iter().take(per_file) {
-            rtk_output.push_str(&format!("  {:>4}: {}\n", line_num, content));
-            shown += 1;
             if shown >= max_results {
                 break;
             }
+            rtk_output.push_str(&format!("{}:{}:{}\n", file_display, line_num, content));
+            shown += 1;
         }
-
-        if matches.len() > per_file {
-            rtk_output.push_str(&format!("  +{}\n", matches.len() - per_file));
-        }
-        rtk_output.push('\n');
     }
 
-    if total > shown {
-        rtk_output.push_str(&format!("... +{}\n", total - shown));
+    if total_matches > shown {
+        rtk_output.push_str(&format!("[+{} more]\n", total_matches - shown));
     }
 
     print!("{}", rtk_output);
@@ -150,6 +170,65 @@ pub fn run(
     );
 
     Ok(exit_code)
+}
+
+/// Translate grep BRE pipe semantics to the engine rg uses by default.
+///
+/// grep BRE:  `\|` = alternation,  `|` = literal pipe.
+/// rg default: `|` = alternation,  `\|` = literal pipe.
+///
+/// The two meanings are mirror images, so a naive `replace(r"\|", "|")` fixes only
+/// the alternation case and corrupts the literal-pipe case. We do a single scanning
+/// pass so neither rewrite clobbers the other, and we respect backslash escaping:
+/// a `\\` is a literal backslash and must not let the following `|` be read as `\|`.
+fn translate_bre_pipes(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len() + 4);
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.peek() {
+                // `\|` in BRE = alternation → emit a bare `|` for rg.
+                Some('|') => {
+                    chars.next();
+                    out.push('|');
+                }
+                // `\\` = escaped backslash; keep both, don't consume the next char's meaning.
+                Some('\\') => {
+                    chars.next();
+                    out.push('\\');
+                    out.push('\\');
+                }
+                // Any other escape (`\.`, `\(`, `\d`, …) passes through verbatim.
+                Some(&next) => {
+                    chars.next();
+                    out.push('\\');
+                    out.push(next);
+                }
+                None => out.push('\\'),
+            },
+            // bare `|` in BRE = literal pipe → escape it so rg treats it literally.
+            '|' => out.push_str(r"\|"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn has_format_flag(extra_args: &[String]) -> bool {
+    extra_args.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "-c" | "--count"
+                | "-l"
+                | "--files-with-matches"
+                | "-L"
+                | "--files-without-match"
+                | "-o"
+                | "--only-matching"
+                | "-Z"
+                | "--null"
+        )
+    })
 }
 
 fn clean_line(line: &str, max_len: usize, context_re: Option<&Regex>, pattern: &str) -> String {
@@ -259,12 +338,69 @@ mod tests {
         assert!(!cleaned.is_empty());
     }
 
-    // Fix: BRE \| alternation is translated to PCRE | for rg
+    // Fix: BRE \| alternation is translated to rg | (alternation)
     #[test]
     fn test_bre_alternation_translated() {
-        let pattern = r"fn foo\|pub.*bar";
-        let rg_pattern = pattern.replace(r"\|", "|");
-        assert_eq!(rg_pattern, "fn foo|pub.*bar");
+        // grep BRE `\|` (alternation) must become a bare `|` for rg.
+        assert_eq!(translate_bre_pipes(r"fn foo\|pub.*bar"), "fn foo|pub.*bar");
+    }
+
+    // Regression: a BARE `|` is a LITERAL pipe in grep BRE and must be escaped for rg,
+    // otherwise rg reads it as alternation and over-matches (false positives fed to the
+    // model). Before the fix, `rtk grep 'a|b'` matched every line containing `a` OR `b`.
+    #[test]
+    fn test_bare_pipe_treated_as_literal() {
+        // `a|b` (grep user wants the literal substring "a|b") → `a\|b` for rg (literal pipe).
+        assert_eq!(translate_bre_pipes("a|b"), r"a\|b");
+    }
+
+    // The two pipe meanings are mirror images; one pass must not clobber the other.
+    #[test]
+    fn test_mixed_literal_and_alternation_pipes() {
+        // `a|b\|c`: literal "a|b" OR literal "c"
+        //   bare `|`  → `\|` (literal)
+        //   `\|`      → `|`  (alternation)
+        assert_eq!(translate_bre_pipes(r"a|b\|c"), r"a\|b|c");
+    }
+
+    // Escaped backslash must not let the following pipe be misread as `\|`.
+    #[test]
+    fn test_escaped_backslash_before_pipe() {
+        // `\\|` = literal backslash, then a bare (literal) pipe → `\\` + `\|`
+        assert_eq!(translate_bre_pipes(r"\\|"), r"\\\|");
+    }
+
+    // Other escapes pass through verbatim (no accidental mangling of \. \( \d etc).
+    #[test]
+    fn test_other_escapes_passthrough() {
+        assert_eq!(translate_bre_pipes(r"foo\.bar\(x\)"), r"foo\.bar\(x\)");
+    }
+
+    // End-to-end against rg (skips gracefully if rg absent): the literal-pipe pattern
+    // must match ONLY the literal line, not the alternation-broadened set.
+    #[test]
+    fn test_bare_pipe_does_not_overmatch_via_rg() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("rtk_grep_pipe_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("data.txt");
+        if let Ok(mut f) = std::fs::File::create(&file) {
+            let _ = f.write_all(b"a|b\nalpha\nbeta\n");
+        }
+
+        let translated = translate_bre_pipes("a|b");
+        let mut cmd = resolved_command("rg");
+        cmd.args(["-n", "--no-heading", &translated, file.to_str().unwrap()]);
+        if let Ok(output) = cmd.output() {
+            let out = String::from_utf8_lossy(&output.stdout);
+            let match_count = out.lines().filter(|l| !l.trim().is_empty()).count();
+            // Literal "a|b" exists on exactly one line. Alternation would match 3.
+            assert_eq!(
+                match_count, 1,
+                "literal-pipe search must not over-match; got: {out:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Fix: -r flag (grep recursive) is stripped from extra_args (rg is recursive by default)
@@ -300,6 +436,48 @@ mod tests {
         );
     }
 
+    // --- format flag detection ---
+
+    #[test]
+    fn test_format_flag_detects_count() {
+        assert!(has_format_flag(&["-c".to_string()]));
+        assert!(has_format_flag(&["--count".to_string()]));
+    }
+
+    #[test]
+    fn test_format_flag_detects_files_with_matches() {
+        assert!(has_format_flag(&["-l".to_string()]));
+        assert!(has_format_flag(&["--files-with-matches".to_string()]));
+    }
+
+    #[test]
+    fn test_format_flag_detects_files_without_match() {
+        assert!(has_format_flag(&["-L".to_string()]));
+        assert!(has_format_flag(&["--files-without-match".to_string()]));
+    }
+
+    #[test]
+    fn test_format_flag_detects_only_matching() {
+        assert!(has_format_flag(&["-o".to_string()]));
+        assert!(has_format_flag(&["--only-matching".to_string()]));
+    }
+
+    #[test]
+    fn test_format_flag_detects_null() {
+        assert!(has_format_flag(&["-Z".to_string()]));
+        assert!(has_format_flag(&["--null".to_string()]));
+    }
+
+    #[test]
+    fn test_format_flag_ignores_normal_flags() {
+        assert!(!has_format_flag(&[
+            "-i".to_string(),
+            "-w".to_string(),
+            "-A".to_string(),
+            "3".to_string(),
+        ]));
+    }
+
     // Verify line numbers are always enabled in rg invocation (grep_cmd.rs:24).
     // The -n/--line-numbers clap flag in main.rs is a no-op accepted for compat.
     #[test]
@@ -313,6 +491,26 @@ mod tests {
             assert!(
                 output.status.code() == Some(1) || output.status.success(),
                 "rg -n should be accepted"
+            );
+        }
+        // If rg is not installed, skip gracefully (test still passes)
+    }
+
+    #[test]
+    fn test_rg_no_ignore_vcs_flag_accepted() {
+        // Verify rg accepts --no-ignore-vcs (used to match grep -r behavior for .gitignore)
+        let mut cmd = resolved_command("rg");
+        cmd.args([
+            "-n",
+            "--no-heading",
+            "--no-ignore-vcs",
+            "NONEXISTENT_PATTERN_12345",
+            ".",
+        ]);
+        if let Ok(output) = cmd.output() {
+            assert!(
+                output.status.code() == Some(1) || output.status.success(),
+                "rg --no-ignore-vcs should be accepted"
             );
         }
         // If rg is not installed, skip gracefully (test still passes)

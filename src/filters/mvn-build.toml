@@ -1,17 +1,67 @@
 [filters.mvn-build]
 description = "Compact Maven build output"
-match_command = "^mvn\\s+(compile|package|clean|install)\\b"
+match_command = "^mvn\\s+(compile|package|clean|install|test|verify)\\b"
 strip_ansi = true
 strip_lines_matching = [
+  "^Scanning for projects",
+  "^\\[INFO\\] Scanning for projects",
+  "^\\[INFO\\] Reactor",
   "^\\[INFO\\] ---",
+  "^\\[INFO\\] -+$",
+  "^\\[INFO\\] =+$",
+  "^\\[INFO\\] $",
+  "^\\[INFO\\]\\s*$",
   "^\\[INFO\\] Building\\s",
   "^\\[INFO\\] Downloading\\s",
   "^\\[INFO\\] Downloaded\\s",
-  "^\\[INFO\\]\\s*$",
-  "^\\s*$",
+  "^Downloading from\\s",
+  "^Downloaded from\\s",
   "^Downloading:",
   "^Downloaded:",
-  "^Progress",
+  "^Progress \\(\\d+\\)",
+  "^Progress\\s",
+  "^WARNING: A restricted method",
+  "^WARNING: A terminally deprecated method",
+  "^WARNING: java\\.lang\\.System::load",
+  "^WARNING: sun\\.misc\\.Unsafe::",
+  "^WARNING: Please consider reporting this to the maintainers",
+  "^WARNING: Use --enable-native-access",
+  "^WARNING: Restricted methods will be blocked",
+  "^WARNING: .*will be removed in a future release",
+  # Reactor artifact headers (multi-module noise)
+  "^\\[INFO\\] --< ",
+  "^\\[INFO\\]\\s+from ",
+  # Surefire / failsafe decorative banners (kept Tests run: summary)
+  "^\\[INFO\\]\\s+T E S T S",
+  "^\\[INFO\\] Results:",
+  "^\\[INFO\\] Using auto detected provider",
+  # Plugin chatter that's never actionable
+  "^\\[INFO\\] skip non existing resourceDirectory",
+  "^\\[INFO\\] Finished at:",
+  # Java compiler legacy-deprecation noise (e.g. java.applet.*)
+  "^\\[WARNING\\].*java\\.applet\\.",
+  "^\\[WARNING\\].*has been deprecated and marked for removal",
+  # JVM 25 sun.misc.Unsafe deprecation footer block (4 lines)
+  "^WARNING: sun\\.misc\\.Unsafe::objectFieldOffset",
+  "^WARNING: This is a critical method",
+  "^WARNING: A terminally deprecated method in sun\\.misc\\.Unsafe",
+  "^WARNING: sun\\.misc\\.Unsafe::objectFieldOffset will be removed",
+  # java.applet-style deprecation-only warnings (PURELY deprecation announcements)
+  "^\\[WARNING\\].*\\bhas been deprecated\\b",
+  # pgpverify-maven-plugin config-block chatter (before per-artifact lines)
+  "^\\[INFO\\] Key server\\(s\\)",
+  "^\\[INFO\\] Create cache directory for PGP keys:",
+  "^\\[INFO\\] Resolved \\d+ artifact\\(s\\)",
+  "^\\[INFO\\] Artifacts were already validated",
+  # Corpus-discovered patterns (resources, checkstyle, OpenAPI gen)
+  "^\\[INFO\\] writing file ",
+  "^\\[INFO\\] Preparing remote bundle ",
+  "^\\[INFO\\] Copying \\d+ resource",
+  "^\\[INFO\\] You have 0 Checkstyle violations\\.",
+  "^\\[INFO\\] Starting audit\\.\\.\\.",
+  "^\\[INFO\\] Audit done\\.",
+  "^\\[INFO\\] Using 'UTF-8' encoding to copy filtered resources\\.",
+  "^\\s*$",
 ]
 max_lines = 50
 on_empty = "mvn: ok"
@@ -41,4 +91,20 @@ input = """
 [INFO] Total time: 4.123 s
 [INFO] Finished at: 2024-01-15T10:30:00Z
 """
-expected = "[INFO] BUILD SUCCESS\n[INFO] Total time: 4.123 s\n[INFO] Finished at: 2024-01-15T10:30:00Z"
+expected = "[INFO] BUILD SUCCESS\n[INFO] Total time: 4.123 s"
+
+[[tests.mvn-build]]
+name = "strips JDK restricted-method and download progress noise"
+input = """
+Scanning for projects...
+[INFO] Reactor Build Order:
+Downloading from central: https://repo.maven.apache.org/foo.jar
+Downloaded from central: https://repo.maven.apache.org/foo.jar (12 kB at 4 kB/s)
+Progress (1): 4/12 kB
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by org.fusesource.jansi
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning
+WARNING: Restricted methods will be blocked in a future release
+[INFO] BUILD SUCCESS
+"""
+expected = "[INFO] BUILD SUCCESS"

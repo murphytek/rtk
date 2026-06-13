@@ -2,6 +2,7 @@
 
 use crate::core::runner;
 use crate::core::tracking;
+use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{exit_code_from_output, resolved_command, truncate};
 use crate::golangci_cmd;
 use anyhow::{Context, Result};
@@ -46,7 +47,9 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
     let mut cmd = resolved_command("go");
     cmd.arg("test");
 
-    if !args.iter().any(|a| a == "-json") {
+    let skip_json = args.iter().any(|a| a == "-json" || a.starts_with("-bench"));
+
+    if !skip_json {
         cmd.arg("-json");
     }
 
@@ -55,14 +58,24 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
     }
 
     if verbose > 0 {
-        eprintln!("Running: go test -json {}", args.join(" "));
+        eprintln!(
+            "Running: go test {}{}",
+            if !skip_json { "-json " } else { "" },
+            args.join(" ")
+        );
     }
+
+    let filter: fn(&str) -> String = if skip_json {
+        |s: &str| s.to_string()
+    } else {
+        filter_go_test_json
+    };
 
     runner::run_filtered(
         cmd,
         "go test",
         &args.join(" "),
-        filter_go_test_json,
+        filter,
         crate::core::runner::RunOptions::stdout_only().tee("go_test"),
     )
 }
@@ -287,7 +300,7 @@ fn run_go_tool_golangci_lint(args: &[OsString], verbose: u8) -> Result<i32> {
 }
 
 /// Parse go test -json output (NDJSON format)
-fn filter_go_test_json(output: &str) -> String {
+pub(crate) fn filter_go_test_json(output: &str) -> String {
     let mut packages: HashMap<String, PackageResult> = HashMap::new();
     let mut current_test_output: HashMap<(String, String), Vec<String>> = HashMap::new(); // (package, test) -> outputs
     let mut build_output: HashMap<String, Vec<String>> = HashMap::new(); // import_path -> error lines
@@ -329,10 +342,8 @@ fn filter_go_test_json(output: &str) -> String {
         let pkg_result = packages.entry(package.clone()).or_default();
 
         match event.action.as_str() {
-            "pass" => {
-                if event.test.is_some() {
-                    pkg_result.pass += 1;
-                }
+            "pass" if event.test.is_some() => {
+                pkg_result.pass += 1;
             }
             "fail" => {
                 if let Some(test) = &event.test {
@@ -358,10 +369,8 @@ fn filter_go_test_json(output: &str) -> String {
                     pkg_result.package_failed = true;
                 }
             }
-            "skip" => {
-                if event.test.is_some() {
-                    pkg_result.skip += 1;
-                }
+            "skip" if event.test.is_some() => {
+                pkg_result.skip += 1;
             }
             "output" => {
                 if let Some(output_text) = &event.output {
@@ -391,7 +400,13 @@ fn filter_go_test_json(output: &str) -> String {
     let total_fail: usize = packages.values().map(|p| p.fail).sum();
     let total_skip: usize = packages.values().map(|p| p.skip).sum();
     let total_build_fail: usize = packages.values().filter(|p| p.build_failed).count();
-    let total_pkg_fail: usize = packages.values().filter(|p| p.package_failed).count();
+    // Only count package-level fails for packages with no individual test or build failures.
+    // go test -json emits a trailing package-level {"action":"fail"} after any test failure
+    // too, but that event is just a cascade — the individual test failures are already counted.
+    let total_pkg_fail: usize = packages
+        .values()
+        .filter(|p| p.package_failed && p.fail == 0 && !p.build_failed)
+        .count();
 
     let has_failures = total_fail > 0 || total_build_fail > 0 || total_pkg_fail > 0;
 
@@ -418,9 +433,11 @@ fn filter_go_test_json(output: &str) -> String {
     result.push_str(&format!(" in {} packages\n", total_packages));
     result.push_str("═══════════════════════════════════════\n");
 
-    // Show package-level failures first (timeouts, signals, panics)
+    // Show package-level failures first (timeouts, signals, panics).
+    // Skip packages that already have individual test-level failures — those are displayed
+    // in the per-package section below and the package-level event is just a cascade.
     for (package, pkg_result) in packages.iter() {
-        if !pkg_result.package_failed {
+        if !pkg_result.package_failed || pkg_result.fail > 0 || pkg_result.build_failed {
             continue;
         }
 
@@ -553,7 +570,7 @@ fn is_go_test_failure_line(line: &str) -> bool {
 }
 
 /// Filter go build output - show only errors
-fn filter_go_build(output: &str) -> String {
+pub(crate) fn filter_go_build(output: &str) -> String {
     let mut errors: Vec<String> = Vec::new();
 
     for line in output.lines() {
@@ -571,12 +588,17 @@ fn filter_go_build(output: &str) -> String {
     result.push_str(&format!("Go build: {} errors\n", errors.len()));
     result.push_str("═══════════════════════════════════════\n");
 
-    for (i, error) in errors.iter().take(20).enumerate() {
+    const MAX_GO_BUILD_ERRORS: usize = CAP_ERRORS;
+    for (i, error) in errors.iter().take(MAX_GO_BUILD_ERRORS).enumerate() {
         result.push_str(&format!("{}. {}\n", i + 1, truncate(error, 120)));
     }
 
-    if errors.len() > 20 {
-        result.push_str(&format!("\n... +{} more errors\n", errors.len() - 20));
+    if errors.len() > MAX_GO_BUILD_ERRORS {
+        result.push_str(&format!("\n… +{} more errors\n", errors.len() - MAX_GO_BUILD_ERRORS));
+        let all_errors = errors.join("\n");
+        if let Some(hint) = crate::core::tee::force_tee_tail_hint(&all_errors, "go-build", MAX_GO_BUILD_ERRORS + 1) {
+            result.push_str(&format!("  {}\n", hint));
+        }
     }
 
     result.trim().to_string()
@@ -606,9 +628,7 @@ fn is_go_build_error_line(line: &str) -> bool {
 
     // Canonical compiler/config error locations: file:line:col: ...
     let is_go_config_location = !lower.starts_with("go: ")
-        && (lower.contains("go.mod:")
-            || lower.contains("go.work:")
-            || lower.contains("go.sum:"));
+        && (lower.contains("go.mod:") || lower.contains("go.work:") || lower.contains("go.sum:"));
     if trimmed.contains(".go:") || is_go_config_location {
         return true;
     }
@@ -660,12 +680,17 @@ fn filter_go_vet(output: &str) -> String {
     result.push_str(&format!("Go vet: {} issues\n", issues.len()));
     result.push_str("═══════════════════════════════════════\n");
 
-    for (i, issue) in issues.iter().take(20).enumerate() {
+    const MAX_GO_VET_ISSUES: usize = CAP_ERRORS;
+    for (i, issue) in issues.iter().take(MAX_GO_VET_ISSUES).enumerate() {
         result.push_str(&format!("{}. {}\n", i + 1, truncate(issue, 120)));
     }
 
-    if issues.len() > 20 {
-        result.push_str(&format!("\n... +{} more issues\n", issues.len() - 20));
+    if issues.len() > MAX_GO_VET_ISSUES {
+        result.push_str(&format!("\n… +{} more issues\n", issues.len() - MAX_GO_VET_ISSUES));
+        let all_issues = issues.join("\n");
+        if let Some(hint) = crate::core::tee::force_tee_tail_hint(&all_issues, "go-vet", MAX_GO_VET_ISSUES + 1) {
+            result.push_str(&format!("  {}\n", hint));
+        }
     }
 
     result.trim().to_string()
@@ -755,6 +780,91 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_go_test_no_double_count_on_test_failure() {
+        // go test -json always emits a package-level {"action":"fail"} after each
+        // test-level failure. The package-level event is a cascade, not an additional
+        // failure. The summary header must show "1 failed", not "2 failed".
+        let output = r#"{"Time":"2024-01-01T10:00:00Z","Action":"run","Package":"example.com/foo","Test":"TestFail"}
+{"Time":"2024-01-01T10:00:01Z","Action":"output","Package":"example.com/foo","Test":"TestFail","Output":"=== RUN   TestFail\n"}
+{"Time":"2024-01-01T10:00:02Z","Action":"output","Package":"example.com/foo","Test":"TestFail","Output":"    Error: expected 5, got 3\n"}
+{"Time":"2024-01-01T10:00:03Z","Action":"fail","Package":"example.com/foo","Test":"TestFail","Elapsed":0.5}
+{"Time":"2024-01-01T10:00:03Z","Action":"fail","Package":"example.com/foo","Elapsed":0.5}"#;
+
+        let result = filter_go_test_json(output);
+        // The summary header must say "1 failed", not "2 failed" (no double-counting).
+        assert!(
+            result.starts_with("Go test: 0 passed, 1 failed"),
+            "Expected header 'Go test: 0 passed, 1 failed', got: {}",
+            result
+        );
+        assert!(result.contains("TestFail"));
+        assert!(result.contains("expected 5, got 3"));
+        // The package must NOT appear twice (once as "[FAIL]" and once with test details).
+        assert_eq!(
+            result.matches("foo").count(),
+            1,
+            "Package name should appear exactly once, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_filter_go_test_timeout_with_signal_quit_output() {
+        // Exact reproduction of the scenario from issue #958: the signal: quit line
+        // appears as a separate JSON output event.
+        let output = r#"{"Action":"start","Package":"example.com/pkg"}
+{"Action":"output","Package":"example.com/pkg","Output":"*** Test killed with quit: ran too long (1m30s).\n"}
+{"Action":"output","Package":"example.com/pkg","Output":"signal: quit\n"}
+{"Action":"output","Package":"example.com/pkg","Output":"FAIL\texample.com/pkg\t90.000s\n"}
+{"Action":"fail","Package":"example.com/pkg","Elapsed":90.001}"#;
+
+        let result = filter_go_test_json(output);
+        assert!(
+            result.starts_with("Go test: 0 passed, 1 failed"),
+            "Expected 'Go test: 0 passed, 1 failed', got: {}",
+            result
+        );
+        assert!(
+            !result.contains("No tests found"),
+            "Must not say 'No tests found' on timeout, got: {}",
+            result
+        );
+        assert!(
+            result.contains("Test killed with quit"),
+            "Should show the timeout message, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_filter_go_test_timeout_with_passing_tests_before_kill() {
+        // Some tests pass before the package times out.
+        // Summary should show both pass and fail counts.
+        let output = r#"{"Action":"run","Package":"example.com/foo","Test":"TestFast"}
+{"Action":"pass","Package":"example.com/foo","Test":"TestFast","Elapsed":0.001}
+{"Action":"run","Package":"example.com/foo","Test":"TestHang"}
+{"Action":"output","Package":"example.com/foo","Output":"*** Test killed with quit: ran too long (30s).\n"}
+{"Action":"fail","Package":"example.com/foo","Elapsed":30.001}"#;
+
+        let result = filter_go_test_json(output);
+        assert!(
+            result.starts_with("Go test: 1 passed, 1 failed"),
+            "Expected 'Go test: 1 passed, 1 failed', got: {}",
+            result
+        );
+        assert!(
+            !result.contains("No tests found"),
+            "Must not say 'No tests found', got: {}",
+            result
+        );
+        assert!(
+            result.contains("Test killed with quit"),
+            "Should show timeout message, got: {}",
+            result
+        );
+    }
+
+    #[test]
     fn test_filter_go_build_success() {
         let output = "";
         let result = filter_go_build(output);
@@ -790,9 +900,7 @@ go: downloading golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2"#;
     #[test]
     fn test_is_go_build_error_line_recognizes_real_compiler_errors() {
         assert!(is_go_build_error_line("undefined: missingFunc"));
-        assert!(is_go_build_error_line(
-            "cannot find package \"foo/bar\""
-        ));
+        assert!(is_go_build_error_line("cannot find package \"foo/bar\""));
         assert!(is_go_build_error_line(
             "found packages a (a.go) and b (b.go) in /tmp/rtk-go-build-probe-mix"
         ));
@@ -876,7 +984,9 @@ go: cannot load module missing listed in go.work file: open missing/go.mod: no s
 
         let result = filter_go_build(output);
         assert!(result.contains("3 errors"));
-        assert!(result.contains("go.mod file not found in current directory or any parent directory"));
+        assert!(
+            result.contains("go.mod file not found in current directory or any parent directory")
+        );
         assert!(result.contains("no Go files in /tmp/example"));
         assert!(result.contains("go: cannot load module missing listed in go.work file"));
     }

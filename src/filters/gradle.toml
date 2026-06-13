@@ -1,22 +1,55 @@
 [filters.gradle]
 description = "Compact Gradle build output — strip progress, keep tasks and errors"
-match_command = "^(gradle|gradlew|\\./)gradlew?\\b"
+match_command = "^(?:\\./)?(?:gradle|gradlew)\\b"
 strip_ansi = true
 strip_lines_matching = [
   "^\\s*$",
+  # progress / transient frames (carriage-return lines)
+  "<\\d+/\\d+ tasks>",
+  "\\b\\d+% EXECUTING",
+  "\\b\\d+% CONFIGURING",
+  "\\b\\d+% INITIALIZING",
+  "\\b\\d+% WAITING",
+  "^\\s*<-+>\\s*$",
+  # task chatter (note: task-FAILED lines are matched by the keep-patterns below)
+  "^> Task :.*UP-TO-DATE$",
+  "^> Task :.*NO-SOURCE$",
+  "^> Task :.*FROM-CACHE$",
+  "^> Task :.*SKIPPED$",
   "^> Configuring project",
   "^> Resolving dependencies",
   "^> Transform ",
   "^Download(ing)?\\s+http",
-  "^\\s*<-+>\\s*$",
-  "^> Task :.*UP-TO-DATE$",
-  "^> Task :.*NO-SOURCE$",
-  "^> Task :.*FROM-CACHE$",
-  "^Starting a Gradle Daemon",
+  # configure / daemon / welcome chatter
+  "^Configure project",
+  "^Configuration on demand",
+  "^Welcome to Gradle",
   "^Daemon will be stopped",
+  "^Starting a Gradle Daemon",
+  # jansi / SLF4J / native-platform restricted-access warnings
+  "^WARNING: A restricted method",
+  "^WARNING: A terminally deprecated method",
+  "^WARNING: java\\.lang\\.System::load has been called by net\\.rubygrapefruit\\.platform",
+  "^WARNING: sun\\.misc\\.Unsafe::",
+  "^WARNING: Please consider reporting this to the maintainers",
+  "^WARNING: Use --enable-native-access",
+  "^WARNING: Restricted methods will be blocked",
+  "^WARNING: .*will be removed in a future release",
+  # Gradle release-notes banner shown on first daemon start
+  "^Here are the highlights of this release:",
+  "^For more details see https://docs\\.gradle\\.org/",
+  "^\\s+- ",
+  # JVM forking / daemon-tuning hints
+  "^To honour the JVM settings for this build",
+  "^Consider enabling configuration cache",
+  # Wrapper download progress dots: ".....10%......"
+  "^[.]+\\d+%[.]*$",
+  # Gradle-bundled help footer (verbose, never useful)
+  "^You can use --scan",
+  "^Use '--warning-mode all' to show",
 ]
-truncate_lines_at = 150
-max_lines = 50
+truncate_lines_at = 200
+max_lines = 80
 on_empty = "gradle: ok"
 
 [[tests.gradle]]
