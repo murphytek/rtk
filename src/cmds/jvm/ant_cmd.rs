@@ -73,12 +73,15 @@ lazy_static! {
     // Lines we strip (noise).
     static ref RE_STRIP_BUILDFILE: Regex =
         Regex::new(r"^Buildfile:").unwrap();
-    // Lowercase target labels: "compile:", "init:", etc.
+    // Target labels: "compile:", "init:", and internal hyphen-prefixed targets
+    // like "-check-git-state:" / "-ivy-fail-disallowed-ivy-version:".
     static ref RE_STRIP_TARGET: Regex =
-        Regex::new(r"^[a-z][a-zA-Z0-9_-]+:$").unwrap();
-    // Generic harmless task chatter (echo, delete, mkdir, copy, move, etc.).
+        Regex::new(r"^-?[a-z][a-zA-Z0-9_.-]*:$").unwrap();
+    // Generic harmless task chatter (echo, delete, mkdir, copy, move, ivy
+    // resolution noise, etc.). [javac]/[junit]/[testng] are handled separately
+    // so diagnostics and test results are never swept up here.
     static ref RE_STRIP_TASK_CHATTER: Regex =
-        Regex::new(r"^\s+\[(echo|delete|mkdir|copy|move|propertyfile|fixcrlf)\]").unwrap();
+        Regex::new(r"^\s*\[(echo|delete|mkdir|copy|move|propertyfile|fixcrlf|loadresource|ivy:[a-z]+)\]").unwrap();
     // [javac] informational chatter only — never strip lines that contain
     // diagnostic context (source snippets, carets, symbol/location, error count
     // summaries). Stripping all `[javac]` lines drops the user-actionable
@@ -328,6 +331,49 @@ Total time: 0 seconds
             filtered
         );
         assert!(filtered.contains("BUILD FAILED"));
+        assert!(filtered.contains("Total time:"));
+    }
+
+    #[test]
+    fn test_strips_hyphen_targets_and_ivy_chatter() {
+        // Ivy/Ant builds (e.g. lucene-solr) emit hyphen-prefixed internal
+        // targets and repeated ivy/loadresource task chatter.
+        // Note: ivy/loadresource chatter is often emitted at column 0 (no
+        // leading indent), unlike [javac]; the strip pattern must allow both.
+        let output = "\
+-check-git-state:
+-ivy-fail-disallowed-ivy-version:
+[loadresource] Do not set property disallowed.ivy.jars.list as its length is 0.
+[ivy:configure] :: Apache Ivy 2.4.0 :: http://ant.apache.org/ivy/ ::
+[ivy:retrieve] :: retrieving :: org.apache#lucene
+compile:
+    [javac] Compiling 200 source files
+
+BUILD SUCCESSFUL
+Total time: 12 seconds
+";
+        let filtered = filter_ant_build(output);
+        assert!(
+            !filtered.contains("-check-git-state:"),
+            "hyphen-prefixed target should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(
+            !filtered.contains("-ivy-fail-disallowed"),
+            "hyphen-prefixed ivy target should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(
+            !filtered.contains("[ivy:configure]") && !filtered.contains("[ivy:retrieve]"),
+            "ivy task chatter should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(
+            !filtered.contains("[loadresource]"),
+            "loadresource chatter should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(filtered.contains("BUILD SUCCESSFUL"));
         assert!(filtered.contains("Total time:"));
     }
 
