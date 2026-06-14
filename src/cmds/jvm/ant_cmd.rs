@@ -3,6 +3,7 @@
 //! BUILD SUCCESSFUL/FAILED, and the total-time summary.
 
 use crate::core::runner;
+use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{exit_code_from_output, resolved_build_command, strip_ansi, truncate};
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
@@ -83,7 +84,7 @@ lazy_static! {
     // summaries). Stripping all `[javac]` lines drops the user-actionable
     // continuation lines that follow a `file:line: error:` header.
     static ref RE_STRIP_JAVAC_INFO: Regex =
-        Regex::new(r"^\s+\[javac\]\s+(?:Compiling\b|Note:|Compiled\b|warning:\s*\[options\])").unwrap();
+        Regex::new(r"^\s+\[javac\]\s+(?:Compiling\b|Note:|Compiled\b|warning:\s*\[options\]|Usage:|use --help\b)").unwrap();
 }
 
 /// Execute a known ant target with compact filtering.
@@ -149,33 +150,51 @@ pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
 /// task chatter, keeps errors and BUILD banner.
 pub fn filter_ant_build(output: &str) -> String {
     let mut kept: Vec<String> = Vec::new();
+    // Cap the `[javac]` diagnostic flood: a failed compile can emit hundreds of
+    // multi-line error blocks. Keep the first CAP_ERRORS lines (the leading
+    // errors with their full source/caret/symbol context), summarise the rest,
+    // and always preserve the BUILD banner that follows.
+    let mut javac_lines = 0usize;
+    let mut dropped = 0usize;
+    let mut marker_pos: Option<usize> = None;
 
     for line in output.lines() {
         if line.trim().is_empty() {
             continue;
         }
 
-        // Always preserve these.
-        if RE_KEEP_BUILD_RESULT.is_match(line)
+        let is_keep = RE_KEEP_BUILD_RESULT.is_match(line)
             || RE_KEEP_TOTAL_TIME.is_match(line)
             || RE_KEEP_JAVAC_ERROR.is_match(line)
             || RE_KEEP_ERROR.is_match(line)
-            || RE_KEEP_FAILED.is_match(line)
+            || RE_KEEP_FAILED.is_match(line);
+
+        // Strip noise unless the line is an error/result we always keep.
+        if !is_keep
+            && (RE_STRIP_BUILDFILE.is_match(line)
+                || RE_STRIP_TARGET.is_match(line)
+                || RE_STRIP_TASK_CHATTER.is_match(line)
+                || RE_STRIP_JAVAC_INFO.is_match(line))
         {
-            kept.push(truncate(line.trim_end(), 240).to_string());
             continue;
         }
 
-        // Strip these patterns.
-        if RE_STRIP_BUILDFILE.is_match(line)
-            || RE_STRIP_TARGET.is_match(line)
-            || RE_STRIP_TASK_CHATTER.is_match(line)
-            || RE_STRIP_JAVAC_INFO.is_match(line)
-        {
-            continue;
+        // Cap [javac] diagnostic lines; non-javac lines (BUILD banner, the
+        // build.xml failure trail, Total time) are never capped.
+        if line.trim_start().starts_with("[javac]") {
+            javac_lines += 1;
+            if javac_lines > CAP_ERRORS {
+                marker_pos.get_or_insert(kept.len());
+                dropped += 1;
+                continue;
+            }
         }
 
         kept.push(truncate(line.trim_end(), 240).to_string());
+    }
+
+    if let Some(pos) = marker_pos {
+        kept.insert(pos, format!("    … +{} more javac lines", dropped));
     }
 
     if kept.is_empty() {
@@ -276,5 +295,70 @@ Total time: 4 seconds
     fn test_empty_input_passes_through() {
         assert_eq!(filter_ant_build(""), "ant: ok");
         assert_eq!(filter_ant_build("   \n\n   "), "ant: ok");
+    }
+
+    #[test]
+    fn test_strips_javac_usage_help_keeps_error() {
+        let output = "\
+compile:
+    [javac] Compiling 22 source files to /tmp/out
+    [javac] error: release version 7 not supported
+    [javac] Usage: javac <options> <source files>
+    [javac] use --help for a list of possible options
+
+BUILD FAILED
+/path/build.xml:764: Compile failed; see the compiler error output for details.
+
+Total time: 0 seconds
+";
+        let filtered = filter_ant_build(output);
+        assert!(
+            filtered.contains("error: release version 7 not supported"),
+            "real javac error must be preserved, got:\n{}",
+            filtered
+        );
+        assert!(
+            !filtered.contains("Usage: javac"),
+            "javac usage help should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(
+            !filtered.contains("use --help"),
+            "javac --help hint should be stripped, got:\n{}",
+            filtered
+        );
+        assert!(filtered.contains("BUILD FAILED"));
+        assert!(filtered.contains("Total time:"));
+    }
+
+    #[test]
+    fn test_caps_javac_error_flood_keeps_banner() {
+        let mut input = String::from("compile:\n");
+        // 60 distinct compile errors, each with a caret context line (120 javac lines).
+        for i in 0..60 {
+            input.push_str(&format!(
+                "    [javac] /path/File{i}.java:{i}: error: cannot find symbol\n    [javac]            ^\n"
+            ));
+        }
+        input.push_str("\nBUILD FAILED\n/path/build.xml:52: Compile failed; see details.\n\nTotal time: 1 second\n");
+
+        let filtered = filter_ant_build(&input);
+        let javac_kept = filtered
+            .lines()
+            .filter(|l| l.trim_start().starts_with("[javac]"))
+            .count();
+        assert!(
+            javac_kept <= CAP_ERRORS,
+            "javac flood must be capped at {CAP_ERRORS}, kept {javac_kept}:\n{filtered}"
+        );
+        assert!(
+            filtered.contains("more javac lines"),
+            "must summarise dropped javac lines, got:\n{}",
+            filtered
+        );
+        // First error retained with full context; banner never dropped.
+        assert!(filtered.contains("/path/File0.java:0: error:"));
+        assert!(filtered.contains("BUILD FAILED"));
+        assert!(filtered.contains("Total time:"));
     }
 }
