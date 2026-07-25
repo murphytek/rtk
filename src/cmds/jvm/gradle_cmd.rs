@@ -475,4 +475,42 @@ BUILD FAILED in 2s
         assert_eq!(GradleCommand::Test.label(), "gradle test");
         assert_eq!(GradleCommand::Clean.tee_label(), "gradle_clean");
     }
+
+    // Regression: the `RTK_NO_INJECT_FLAGS` kill-switch (murphytek b031884) is the
+    // documented escape hatch when injected flags upset a user's build. It is the
+    // only carried JVM behaviour with no coverage, so pin the truth table here:
+    // any non-empty value other than "0" disables injection.
+    //
+    // Serialised via a mutex because these tests mutate process-global env.
+    #[test]
+    fn test_injection_disabled_truth_table() {
+        use std::sync::Mutex;
+        lazy_static! {
+            static ref ENV_LOCK: Mutex<()> = Mutex::new(());
+        }
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let restore = std::env::var("RTK_NO_INJECT_FLAGS").ok();
+
+        std::env::remove_var("RTK_NO_INJECT_FLAGS");
+        assert!(!injection_disabled(), "unset must leave injection enabled");
+
+        for on in ["1", "true", "yes", "anything"] {
+            std::env::set_var("RTK_NO_INJECT_FLAGS", on);
+            assert!(injection_disabled(), "{on:?} must disable injection");
+        }
+
+        for off in ["", "0"] {
+            std::env::set_var("RTK_NO_INJECT_FLAGS", off);
+            assert!(
+                !injection_disabled(),
+                "{off:?} must leave injection enabled"
+            );
+        }
+
+        match restore {
+            Some(v) => std::env::set_var("RTK_NO_INJECT_FLAGS", v),
+            None => std::env::remove_var("RTK_NO_INJECT_FLAGS"),
+        }
+    }
 }

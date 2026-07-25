@@ -189,10 +189,13 @@ jobs:
 
       - name: Get version
         id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          TAG="${{ inputs.tag }}"
+          TAG="$INPUT_TAG"
           if [ -z "$TAG" ]; then
-            TAG="${{ github.event.release.tag_name }}"
+            TAG="$RELEASE_TAG"
           fi
           echo "version=$TAG" >> $GITHUB_OUTPUT
 

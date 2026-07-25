@@ -1,6 +1,7 @@
 //! Reads source files with optional language-aware filtering to strip boilerplate.
 
 use crate::core::filter::{self, FilterLevel, Language};
+use crate::core::guard::never_worse;
 use crate::core::tracking;
 use anyhow::{Context, Result};
 use std::fs;
@@ -66,17 +67,24 @@ pub fn run(
     let line_offset;
     (filtered, line_offset) = apply_line_window(&filtered, max_lines, tail_lines, &lang);
 
-    let rtk_output = if line_numbers {
-        format_with_line_numbers(&filtered, line_offset)
+    let (raw, rtk_output) = if line_numbers {
+        (
+            // The raw baseline is the whole file, so its gutter starts at line 1;
+            // the filtered output keeps the true file offset of its first line
+            // (murphytek #12 — a tail window must not renumber from 1).
+            format_with_line_numbers(&content, 1),
+            format_with_line_numbers(&filtered, line_offset),
+        )
     } else {
-        filtered.clone()
+        (content.clone(), filtered.clone())
     };
-    print!("{}", rtk_output);
+    let shown = never_worse(&raw, &rtk_output);
+    print!("{}", shown);
     timer.track(
         &format!("cat {}", file.display()),
         "rtk read",
-        &content,
-        &rtk_output,
+        &raw,
+        shown,
     );
     Ok(())
 }
@@ -131,14 +139,21 @@ pub fn run_stdin(
     let line_offset;
     (filtered, line_offset) = apply_line_window(&filtered, max_lines, tail_lines, &lang);
 
-    let rtk_output = if line_numbers {
-        format_with_line_numbers(&filtered, line_offset)
+    let (raw, rtk_output) = if line_numbers {
+        (
+            // The raw baseline is the whole file, so its gutter starts at line 1;
+            // the filtered output keeps the true file offset of its first line
+            // (murphytek #12 — a tail window must not renumber from 1).
+            format_with_line_numbers(&content, 1),
+            format_with_line_numbers(&filtered, line_offset),
+        )
     } else {
-        filtered.clone()
+        (content.clone(), filtered.clone())
     };
-    print!("{}", rtk_output);
+    let shown = never_worse(&raw, &rtk_output);
+    print!("{}", shown);
 
-    timer.track("cat - (stdin)", "rtk read -", &content, &rtk_output);
+    timer.track("cat - (stdin)", "rtk read -", &raw, shown);
     Ok(())
 }
 
