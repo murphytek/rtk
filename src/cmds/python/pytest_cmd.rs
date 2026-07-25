@@ -202,7 +202,6 @@ fn build_pytest_summary(
         result.push_str(&format!(", {} xpassed", xpassed));
     }
     result.push('\n');
-    result.push_str("═══════════════════════════════════════\n");
 
     // Surface xfail/xpass entries (with their reasons) — XPASS in particular
     // signals that something expected-to-fail now passes.
@@ -468,6 +467,21 @@ XPASS test_math.py::test_unexpected_pass - this should fail but currently passes
         assert!(result.contains("XPASS"), "got: {result}");
         assert!(result.contains("float precision"), "got: {result}");
         assert!(result.contains("test_division_by_zero"), "got: {result}");
+
+        // The xfail/xpass block must be emitted exactly once. A duplicated
+        // rendering block survived the v0.43.0 merge (both parents had one copy,
+        // the merge produced two) and printed every outcome twice; the existing
+        // `.contains` assertions could not see it.
+        assert_eq!(
+            result.matches("Expected-failure outcomes:").count(),
+            1,
+            "xfail section emitted more than once: {result}"
+        );
+        assert_eq!(
+            result.matches("test_division_by_zero").count(),
+            1,
+            "xfail entries duplicated: {result}"
+        );
     }
 
     #[test]

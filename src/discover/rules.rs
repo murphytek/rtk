@@ -89,9 +89,18 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^(rg|grep)\s+",
+        pattern: r"^grep\s+",
         rtk_cmd: "rtk grep",
-        rewrite_prefixes: &["rg", "grep"],
+        rewrite_prefixes: &["grep"],
+        category: "Files",
+        savings_pct: 75.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        pattern: r"^rg\s+",
+        rtk_cmd: "rtk rg",
+        rewrite_prefixes: &["rg"],
         category: "Files",
         savings_pct: 75.0,
         subcmd_savings: &[],
@@ -384,6 +393,15 @@ pub const RULES: &[RtkRule] = &[
         pattern: r"^kubectl\s+(get|logs|describe|apply)",
         rtk_cmd: "rtk kubectl",
         rewrite_prefixes: &["kubectl"],
+        category: "Infra",
+        savings_pct: 85.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        pattern: r"^oc\s+(get|logs|describe|apply|status|adm)",
+        rtk_cmd: "rtk oc",
+        rewrite_prefixes: &["oc"],
         category: "Infra",
         savings_pct: 85.0,
         subcmd_savings: &[],
@@ -689,17 +707,15 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
-    // JVM-MVN BEGIN
     RtkRule {
-        pattern: r"^(?:mvn|mvnw)\s+(compile|package|clean|install|test|verify)\b",
+        pattern: r"^(?:\./mvnw|mvnw\.cmd|mvnw|mvn)\b(?:\s+\S+)*?\s+(compile|test|integration-test|package|install|verify|deploy)\b",
         rtk_cmd: "rtk mvn",
-        rewrite_prefixes: &["./mvnw", "mvnw", "mvn"],
+        rewrite_prefixes: &["./mvnw", "mvnw.cmd", "mvnw", "mvn"],
         category: "Build",
-        savings_pct: 70.0,
+        savings_pct: 82.0,
         subcmd_savings: &[],
         subcmd_status: &[],
     },
-    // JVM-MVN END
     RtkRule {
         pattern: r"^ping\b",
         rtk_cmd: "rtk ping",
@@ -743,6 +759,21 @@ pub const RULES: &[RtkRule] = &[
         category: "System",
         savings_pct: 60.0,
         subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        pattern: r"^pulumi\s+(preview|up|destroy|refresh|stack)(\s|$)",
+        rtk_cmd: "rtk pulumi",
+        rewrite_prefixes: &["pulumi"],
+        category: "Infra",
+        savings_pct: 45.0,
+        subcmd_savings: &[
+            ("up", 66.0),
+            ("destroy", 72.0),
+            ("refresh", 35.0),
+            ("preview", 25.0),
+            ("stack", 29.0),
+        ],
         subcmd_status: &[],
     },
     RtkRule {
@@ -886,6 +917,9 @@ pub const RULES: &[RtkRule] = &[
     // of bare `gradle`/`gradlew` invocations. The explicit `rtk gradle` subcommand
     // remains available for direct use, but is no longer auto-routed here to avoid a
     // duplicate-rule collision (RegexSet last-match-wins).
+    // JVM-MVN: likewise, upstream's `rtk mvn` rewrite rule (above) now owns Maven —
+    // upstream replaced the TOML filter with a maintained Rust module covering the
+    // full lifecycle, so murphytek's earlier `rtk mvn` rule and module were dropped.
     // JVM-ANT BEGIN
     RtkRule {
         pattern: r"^ant\s+(build|clean|test|compile|package|install)\b",

@@ -8,6 +8,9 @@
 //!   only fails when a regression cuts compression in half)
 //! - Asserts critical signal lines are preserved (errors, BUILD result)
 
+// NOTE: the Maven sections were removed when the fork adopted upstream's Rust
+// `mvn` module (rtk-ai/rtk 6c4950e), which replaced murphytek's mvn-build.toml
+// filter and ships its own fixtures and tests. Gradle and Ant remain fork-only.
 mod common;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/jvm");
@@ -34,108 +37,7 @@ fn reduced_by_at_least(raw: &str, filtered: &str, pct: u8) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// 1. mvn_clean_compile_with_pgp.txt → filter_mvn_build
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_mvn_compile_with_pgp_reduces_by_40pct() {
-    let raw = fixture("mvn_clean_compile_with_pgp.txt");
-    let filtered = common::filter_mvn_build(&raw);
-
-    assert!(
-        reduced_by_at_least(&raw, &filtered, 40),
-        "expected ≥40% reduction, got:\nraw={} bytes, filtered={} bytes\n---\n{}",
-        raw.len(),
-        filtered.len(),
-        filtered
-    );
-}
-
-#[test]
-fn test_mvn_compile_with_pgp_preserves_build_success() {
-    let raw = fixture("mvn_clean_compile_with_pgp.txt");
-    let filtered = common::filter_mvn_build(&raw);
-
-    assert!(
-        filtered.contains("BUILD SUCCESS"),
-        "BUILD SUCCESS must be preserved, got:\n{}",
-        filtered
-    );
-}
-
-#[test]
-fn test_mvn_compile_with_pgp_strips_pgp_noise() {
-    let raw = fixture("mvn_clean_compile_with_pgp.txt");
-    let filtered = common::filter_mvn_build(&raw);
-
-    assert!(
-        !filtered.contains("Key server(s)"),
-        "PGP config noise should be stripped, got:\n{}",
-        filtered
-    );
-    assert!(
-        !filtered.contains("Copying 3 resources"),
-        "resource-copy noise should be stripped"
-    );
-    assert!(
-        !filtered.contains("Starting audit"),
-        "checkstyle audit lines should be stripped"
-    );
-    assert!(
-        !filtered.contains("UTF-8' encoding"),
-        "encoding notice should be stripped"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 2. mvn_test_failure.txt → filter_mvn_test
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_mvn_test_failure_reduces_by_40pct() {
-    let raw = fixture("mvn_test_failure.txt");
-    let filtered = common::filter_mvn_test(&raw);
-
-    assert!(
-        reduced_by_at_least(&raw, &filtered, 40),
-        "expected ≥40% reduction, raw={} filtered={}\n{}",
-        raw.len(),
-        filtered.len(),
-        filtered
-    );
-}
-
-#[test]
-fn test_mvn_test_failure_preserves_error_and_build_failure() {
-    let raw = fixture("mvn_test_failure.txt");
-    let filtered = common::filter_mvn_test(&raw);
-
-    assert!(
-        filtered.contains("BUILD FAILURE"),
-        "BUILD FAILURE must be preserved, got:\n{}",
-        filtered
-    );
-    assert!(
-        filtered.contains("[ERROR]"),
-        "ERROR lines must be preserved, got:\n{}",
-        filtered
-    );
-}
-
-#[test]
-fn test_mvn_test_failure_preserves_tests_run_summary() {
-    let raw = fixture("mvn_test_failure.txt");
-    let filtered = common::filter_mvn_test(&raw);
-
-    assert!(
-        filtered.contains("Tests run:"),
-        "Tests run: summary must be preserved, got:\n{}",
-        filtered
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 3. gradle_test_with_spotbugs_flood.txt → filter_gradle_test
+// 1. gradle_test_with_spotbugs_flood.txt → filter_gradle_test
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -187,7 +89,7 @@ fn test_gradle_spotbugs_strips_up_to_date_and_progress() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. ant_compile.txt → filter_ant_build
+// 2. ant_compile.txt → filter_ant_build
 // ---------------------------------------------------------------------------
 
 #[test]
