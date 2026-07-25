@@ -53,8 +53,12 @@ enum WcMode {
     Bytes,
     /// Chars only (-m)
     Chars,
-    /// Multiple flags combined — keep compact format
-    Mixed,
+    /// Multiple flags combined — keep compact format. Carries the exact number
+    /// of count columns `wc` will emit (one per requested flag). Assuming a
+    /// fixed upper bound of 4 here makes the numeric-prefix peeler swallow the
+    /// leading token of a filename that starts with digits, e.g.
+    /// `wc -lw "123 report.txt"` -> `2 2 123` instead of `2 2` (murphytek #8).
+    Mixed(usize),
 }
 
 fn detect_mode(args: &[String]) -> WcMode {
@@ -103,7 +107,7 @@ fn detect_mode(args: &[String]) -> WcMode {
         return WcMode::Full;
     }
     if flag_count > 1 {
-        return WcMode::Mixed;
+        return WcMode::Mixed(flag_count);
     }
 
     if has_l {
@@ -186,12 +190,13 @@ fn format_single_line(line: &str, mode: &WcMode) -> String {
                 line.trim().to_string()
             }
         }
-        WcMode::Mixed => {
+        WcMode::Mixed(n) => {
             // Strip the (possibly space-containing) filename, keep counts only.
-            // Mixed can have up to 4 count columns (-lwcm); peel the numeric
-            // prefix off the front rather than guessing from the last token,
-            // which mis-handles names like `my file.txt`.
-            let (counts, _name) = split_counts_and_name(line, 4);
+            // Peel exactly `n` numeric columns off the front — one per requested
+            // flag — rather than guessing from the last token (which mis-handles
+            // `my file.txt`) or peeling up to 4 (which eats the leading token of
+            // `123 report.txt`).
+            let (counts, _name) = split_counts_and_name(line, *n);
             if counts.is_empty() {
                 line.trim().to_string()
             } else {
@@ -205,11 +210,11 @@ fn format_single_line(line: &str, mode: &WcMode) -> String {
 fn format_multi_line(lines: &[&str], mode: &WcMode) -> String {
     let mut result = Vec::new();
 
-    // Max count columns this mode emits (Mixed can be up to -lwcm = 4).
+    // Exact count columns this mode emits.
     let max_counts = match mode {
         WcMode::Lines | WcMode::Words | WcMode::Bytes | WcMode::Chars => 1,
         WcMode::Full => 3,
-        WcMode::Mixed => 4,
+        WcMode::Mixed(n) => *n,
     };
 
     // Find common directory prefix to shorten paths. Filenames may contain
@@ -259,7 +264,7 @@ fn format_multi_line(lines: &[&str], mode: &WcMode) -> String {
                     result.push(line.trim().to_string());
                 }
             }
-            WcMode::Mixed => {
+            WcMode::Mixed(_) => {
                 if is_total {
                     result.push(format!("Σ {}", counts.join(" ")));
                 } else if counts.is_empty() {
@@ -387,13 +392,13 @@ mod tests {
     #[test]
     fn test_detect_mode_mixed() {
         let args: Vec<String> = vec!["-lw".into(), "file.py".into()];
-        assert_eq!(detect_mode(&args), WcMode::Mixed);
+        assert_eq!(detect_mode(&args), WcMode::Mixed(2));
     }
 
     #[test]
     fn test_detect_mode_separate_flags() {
         let args: Vec<String> = vec!["-l".into(), "-w".into(), "file.py".into()];
-        assert_eq!(detect_mode(&args), WcMode::Mixed);
+        assert_eq!(detect_mode(&args), WcMode::Mixed(2));
     }
 
     #[test]
@@ -477,10 +482,36 @@ mod tests {
     fn test_mixed_single_name_with_spaces() {
         // -lw on a spaced filename: two count columns then the verbatim name.
         let raw = "      30      96 my file.txt\n";
-        let result = filter_wc_output(raw, &WcMode::Mixed);
+        let result = filter_wc_output(raw, &WcMode::Mixed(2));
         // Mixed single-line strips the path entirely, keeping only the counts;
         // it must not leave a dangling fragment of the filename.
         assert_eq!(result, "30 96");
+    }
+
+    #[test]
+    fn test_mixed_single_name_starting_with_digits() {
+        // `wc -lw "123 report.txt"` -> two counts, then a filename whose FIRST
+        // token is numeric. Peeling a fixed 4 columns swallowed `123` as a third
+        // count and printed "2 2 123"; only `flag_count` columns may be peeled.
+        let raw = "      2       2 123 report.txt\n";
+        assert_eq!(filter_wc_output(raw, &WcMode::Mixed(2)), "2 2");
+    }
+
+    #[test]
+    fn test_mixed_three_flags_name_starting_with_digits() {
+        // -lwc = 3 columns; the name's leading `123` must still be left alone.
+        let raw = "      2       2       4 123 report.txt\n";
+        assert_eq!(filter_wc_output(raw, &WcMode::Mixed(3)), "2 2 4");
+    }
+
+    #[test]
+    fn test_mixed_multi_name_starting_with_digits() {
+        // Same hazard in table mode: the name must survive intact.
+        let raw = "      2       2 123 report.txt\n      1       1 other.txt\n      3       3 total\n";
+        assert_eq!(
+            filter_wc_output(raw, &WcMode::Mixed(2)),
+            "2 2 123 report.txt\n1 1 other.txt\nΣ 3 3"
+        );
     }
 
     // --- split_counts_and_name helper contract ---
@@ -535,7 +566,7 @@ mod tests {
     #[test]
     fn test_mixed_multi_name_with_spaces() {
         let raw = "      30      96 my file.txt\n      50     120 other one.txt\n      80     216 total\n";
-        let result = filter_wc_output(raw, &WcMode::Mixed);
+        let result = filter_wc_output(raw, &WcMode::Mixed(2));
         assert_eq!(
             result,
             "30 96 my file.txt\n50 120 other one.txt\nΣ 80 216"

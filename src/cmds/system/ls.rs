@@ -192,8 +192,14 @@ fn parse_ls_line(line: &str) -> Option<(char, String, u64, String)> {
 /// match (and silently drop) real entries whose names end in a dot, e.g. a file
 /// `report.` or a directory `build.`. The `.`/`..` names never contain spaces,
 /// so the last token is a safe, precise anchor. (murphytek #13)
+///
+/// For a symlink, `ls -l` prints `<name> -> <target>`, so the final token is the
+/// *target*, not the entry name. A link pointing at `.` or `..` (`current -> .`)
+/// would otherwise be mistaken for the self/parent entry and silently dropped,
+/// so the arrow suffix is removed before the comparison.
 fn is_dotdir(line: &str) -> bool {
-    match line.split_whitespace().next_back() {
+    let name_part = line.split(" -> ").next().unwrap_or(line);
+    match name_part.split_whitespace().next_back() {
         Some(name) => name == "." || name == "..",
         None => false,
     }
@@ -768,5 +774,43 @@ mod tests {
         // A real filename that merely ends in a dot is NOT a dot-dir entry.
         assert!(!is_dotdir("-rw-r--r--  1 user staff 12 Jan  1 12:00 report."));
         assert!(!is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 build."));
+    }
+
+    #[test]
+    fn test_is_dotdir_ignores_symlink_targets() {
+        // `ls -l` renders a symlink as `<name> -> <target>`. A link whose target
+        // is `.` or `..` must be kept: the trailing token is the target, not the
+        // entry name, so matching on it silently deleted the link.
+        assert!(!is_dotdir("lrwxrwxrwx 1 user staff 1 Jan  1 12:00 current -> ."));
+        assert!(!is_dotdir("lrwxrwxrwx 1 user staff 2 Jan  1 12:00 parent -> .."));
+        // A link named `.`-adjacent but pointing elsewhere is still not a dot-dir.
+        assert!(!is_dotdir("lrwxrwxrwx 1 user staff 3 Jan  1 12:00 link. -> src"));
+        // The genuine self/parent entries still match.
+        assert!(is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 ."));
+        assert!(is_dotdir("drwxr-xr-x  2 user staff 64 Jan  1 12:00 .."));
+    }
+
+    #[test]
+    fn test_compact_keeps_symlinks_to_dot() {
+        let input = "total 8\n\
+                     drwxrwxr-x 2 user staff 4096 Jan  1 12:00 .\n\
+                     drwxrwxr-x 7 user staff 4096 Jan  1 12:00 ..\n\
+                     lrwxrwxrwx 1 user staff    1 Jan  1 12:00 current -> .\n\
+                     lrwxrwxrwx 1 user staff    2 Jan  1 12:00 parent -> ..\n\
+                     -rw-rw-r-- 1 user staff    0 Jan  1 12:00 regular.txt\n";
+        let (entries, _summary, parsed_count) = compact_ls(input, false, false);
+        assert_eq!(
+            parsed_count, 3,
+            "both symlinks and the regular file must be parsed, got: {entries}"
+        );
+        assert!(
+            entries.contains("current"),
+            "symlink to '.' must survive, got: {entries}"
+        );
+        assert!(
+            entries.contains("parent"),
+            "symlink to '..' must survive, got: {entries}"
+        );
+        assert!(entries.contains("regular.txt"));
     }
 }
