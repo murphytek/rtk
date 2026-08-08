@@ -944,6 +944,8 @@ fn probe_mvn_version(command: &Command) -> Option<(u32, u32, u32)> {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    // dead_code can't see the alias's only use inside the lazy_static! expansion
+    #[allow(dead_code)]
     type VersionTriple = (u32, u32, u32);
     lazy_static::lazy_static! {
         static ref CACHE: Mutex<HashMap<std::ffi::OsString, Option<VersionTriple>>> =
