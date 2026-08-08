@@ -5,6 +5,31 @@ All notable changes to rtk (Rust Token Killer) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.45.0](https://github.com/murphytek/rtk/compare/v0.42.1...v0.45.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* `rtk mvn <args>` output format changed. Previously: TOML filter strips INFO/Downloading lines and caps at 50 lines. Now: state-machine filter with Surefire block collapse + locale guard + verbose bypass. Different output shape; significantly better savings tier; behaviour is otherwise a superset (all previously-handled cases still handled, plus test/verify/etc.).
+
+### Features
+
+* **jvm:** cap Ant javac error flood and strip javac help noise ([31a965d](https://github.com/murphytek/rtk/commit/31a965d4636197c42992c8911131de1affb2c239))
+* **jvm:** strip Ant hyphen-targets and Ivy task chatter ([be32a21](https://github.com/murphytek/rtk/commit/be32a21f481b506ed044d9cbdf7390e67e22acb2))
+* **mvn:** inject -B / --no-transfer-progress to kill noise at source ([1270e9d](https://github.com/murphytek/rtk/commit/1270e9d771566beb3b690ce13de18c6e919a716c))
+* **pipe:** add ant filter to stdin pipe registry ([72f3397](https://github.com/murphytek/rtk/commit/72f3397adaabc81cae8629bd8e8e1e092d843bf0))
+
+
+### Bug Fixes
+
+* **mvn:** allow dead_code on VersionTriple alias used only in lazy_static expansion ([92960b8](https://github.com/murphytek/rtk/commit/92960b8f8a4b657940fe373490f8a2401bbe73be))
+
+
+### Miscellaneous Chores
+
+* pin next release version ([374256b](https://github.com/murphytek/rtk/commit/374256b66dd6613dd87e399addabb46958e8d662))
+* sync fork with upstream rtk-ai/rtk v0.43.0 ([#22](https://github.com/murphytek/rtk/issues/22)) ([d94c333](https://github.com/murphytek/rtk/commit/d94c3338ea61d04c1647a06e643be497e0b0e631))
+
 ## [0.42.1](https://github.com/murphytek/rtk/compare/v0.42.0...v0.42.1) (2026-06-13)
 
 
