@@ -219,13 +219,22 @@ jobs:
           cd release
           sha256sum * > checksums.txt
 
+      # softprops/action-gh-release PATCHes the release before uploading,
+      # which 403s ("Resource not accessible by integration") on this fork
+      # even with contents:write. `gh release upload` only touches the
+      # asset-upload endpoint, so it works with the plain GITHUB_TOKEN.
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          files: release/*
-          prerelease: ${{ inputs.prerelease }}
-          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            args=""
+            [ "$PRERELEASE" = "true" ] && args="--prerelease"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $args
+          fi
+          gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
 
   notify-discord:
     name: Notify Discord
