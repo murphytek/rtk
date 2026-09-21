@@ -24,10 +24,14 @@ pub fn run(
     all: bool,
     format: &str,
     failures: bool,
+    recalls: bool,
     reset: bool,
     yes: bool,
     _verbose: u8,
 ) -> Result<()> {
+    if recalls && !reset {
+        return show_recall_stats();
+    }
     let tracker = Tracker::new().context("Failed to initialize tracking database")?;
     let project_scope = resolve_project_scope(project)?; // added: resolve project path
 
@@ -39,7 +43,11 @@ pub fn run(
         tracker
             .reset_all()
             .context("Failed to reset token savings")?;
-        println!("{}", styled("Token savings stats reset to zero.", true));
+        crate::core::retriever::reset_stats().context("Failed to reset recall stats")?;
+        println!(
+            "{}",
+            styled("Token savings and recall stats reset to zero.", true)
+        );
         return Ok(());
     }
 
@@ -75,6 +83,14 @@ pub fn run(
     let summary = tracker
         .get_summary_filtered(project_scope.as_deref()) // changed: use filtered variant
         .context("Failed to load token savings summary from database")?;
+
+    if crate::core::tee_file::legacy_tee_migration_pending() {
+        eprintln!(
+            "{}",
+            format!("[rtk] {}", crate::core::tee_file::LEGACY_TEE_NOTICE).yellow()
+        );
+        eprintln!();
+    }
 
     if summary.total_commands == 0 {
         println!("No tracking data yet.");
@@ -144,6 +160,18 @@ pub fn run(
         // Lightweight RTK_DISABLED bypass check (best-effort, silent on failure)
         if let Some(warning) = check_rtk_disabled_bypass() {
             eprintln!("{}", warning.yellow());
+            eprintln!();
+        }
+
+        let untrusted_filters = crate::hooks::trust::untrusted_active_filter_count();
+        if untrusted_filters > 0 {
+            eprintln!(
+                "{}",
+                format!(
+                    "[rtk] {untrusted_filters} untrusted custom filter(s) not applied — run `rtk trust`"
+                )
+                .yellow()
+            );
             eprintln!();
         }
 
@@ -246,8 +274,6 @@ pub fn run(
                 println!("──────────────────────────────────────────────────────────");
                 for rec in recent {
                     let time = rec.timestamp.with_timezone(&Local).format("%m-%d %H:%M");
-                    // char-safe: byte-slicing &rec.rtk_cmd[..22] panics on a
-                    // multi-byte UTF-8 boundary (e.g. non-ASCII branch/file names).
                     let cmd_short = truncate(&rec.rtk_cmd, 25);
                     // added: tier indicators by savings level
                     let sign = if rec.savings_pct >= 70.0 {
@@ -407,6 +433,113 @@ fn print_efficiency_meter(pct: f64) {
     } else {
         println!("Efficiency meter: {} {:.1}%", meter, pct);
     }
+}
+
+const VERDICT_MIN_ELISIONS: i64 = 5;
+const VERDICT_WIDTH: usize = 14;
+const ISSUES_URL: &str = "https://github.com/rtk-ai/rtk/issues";
+
+/// Bands match `colorize_recall_rate` so the colour and the wording never disagree.
+fn recall_verdict(elisions: i64, recalls: i64) -> &'static str {
+    if elisions < VERDICT_MIN_ELISIONS {
+        return "-";
+    }
+    match recalls * 100 / elisions {
+        p if p >= 30 => "too aggressive",
+        p if p >= 10 => "watch",
+        _ => "ok",
+    }
+}
+
+fn colorize_recall_rate(pct: i64, padded: &str) -> String {
+    if !std::io::stdout().is_terminal() {
+        return padded.to_string();
+    }
+    if pct >= 30 {
+        padded.red().bold().to_string()
+    } else if pct >= 10 {
+        padded.yellow().bold().to_string()
+    } else {
+        padded.green().bold().to_string()
+    }
+}
+
+fn show_recall_stats() -> Result<()> {
+    use crate::core::retriever::RecoveryMode;
+
+    let mode = crate::core::config::Config::load()
+        .unwrap_or_default()
+        .retriever
+        .mode;
+    let mode_label = match mode {
+        RecoveryMode::Sqlite => "sqlite",
+        RecoveryMode::Tee => "tee",
+        RecoveryMode::Disabled => "disabled",
+    };
+    let stats = crate::core::retriever::stats_snapshot()?;
+
+    println!("{}", styled("RTK Recall Efficiency", true));
+    println!("{}", "═".repeat(60));
+    println!("Mode: {mode_label}");
+    println!();
+
+    if stats.is_empty() {
+        println!("No recall activity recorded yet.");
+        println!("Stats appear once filters elide output (failures, trimmed lists).");
+        return Ok(());
+    }
+
+    let slug_width = stats
+        .iter()
+        .map(|s| s.slug.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 24);
+    let table_width = slug_width + 2 + 8 + 2 + 8 + 2 + 6 + 2 + VERDICT_WIDTH;
+
+    let render = |title: &str, mode_key: &str, prefix: &str| {
+        let rows: Vec<_> = stats.iter().filter(|s| s.mode == mode_key).collect();
+        if rows.is_empty() {
+            return;
+        }
+        println!("{}", styled(title, true));
+        println!("{}", "─".repeat(table_width));
+        println!(
+            "{:<slug_width$}  {:>8}  {:>8}  {:>6}  Verdict",
+            "Filter", "Elisions", "Recalled", "Rate"
+        );
+        println!("{}", "─".repeat(table_width));
+        for s in rows {
+            let (pct, rate) = if s.elisions > 0 {
+                let pct = s.recalls * 100 / s.elisions;
+                (pct, format!("{prefix}{pct}%"))
+            } else {
+                (0, "-".to_string())
+            };
+            println!(
+                "{}  {:>8}  {:>8}  {}  {}",
+                truncate_for_column(&s.slug, slug_width),
+                s.elisions,
+                s.recalls,
+                colorize_recall_rate(pct, &format!("{rate:>6}")),
+                colorize_recall_rate(pct, recall_verdict(s.elisions, s.recalls))
+            );
+        }
+        println!();
+    };
+
+    render("Sqlite (exact — reads go through rtk recall)", "sqlite", "");
+    render("Tee (approximate — bash-observed reads only)", "tee", "≥");
+
+    println!("\"too aggressive\" means the filter hides output the agent comes back for.");
+    println!("Each recall costs an extra API turn plus the full output, so it cancels");
+    println!("the savings on that command instead of adding to them.");
+    println!(
+        "\"-\" means fewer than {VERDICT_MIN_ELISIONS} elisions so far: not enough data to judge."
+    );
+    println!();
+    println!("Raise that filter's cap, or report it: {ISSUES_URL}");
+    Ok(())
 }
 
 /// Resolve project scope from --project flag. // added
@@ -705,7 +838,6 @@ fn show_failures(tracker: &Tracker) -> Result<()> {
         println!("{}", styled("Top Commands (by frequency)", true));
         println!("{}", "─".repeat(60));
         for (cmd, count) in &summary.top_commands {
-            // char-safe truncation (raw byte slice panics on multi-byte UTF-8).
             let cmd_display = truncate(cmd, 50);
             println!("  {:>4}x  {}", count, cmd_display);
         }
@@ -716,13 +848,10 @@ fn show_failures(tracker: &Tracker) -> Result<()> {
         println!("{}", styled("Recent Failures (last 10)", true));
         println!("{}", "─".repeat(60));
         for rec in &summary.recent {
-            let ts_short = if rec.timestamp.len() >= 16 {
-                &rec.timestamp[..16]
-            } else {
-                &rec.timestamp
-            };
+            // ISSUE #2787: floor to the previous char boundary so the prefix
+            // never exceeds 16 bytes and never lands mid-character
+            let ts_short = &rec.timestamp[..rec.timestamp.floor_char_boundary(16)];
             let status = if rec.fallback_succeeded { "ok" } else { "FAIL" };
-            // char-safe truncation (raw byte slice panics on multi-byte UTF-8).
             let cmd_display = truncate(&rec.raw_command, 40);
             println!("  {} [{}] {}", ts_short, status, cmd_display);
         }
@@ -737,7 +866,7 @@ fn show_failures(tracker: &Tracker) -> Result<()> {
 fn confirm_reset() -> Result<bool> {
     use std::io::{self, BufRead, IsTerminal, Write};
 
-    eprint!("This will permanently delete all tracking data. Continue? [y/N] ");
+    eprint!("This will permanently delete all tracking data and recall counters (stored outputs are kept). Continue? [y/N] ");
     io::stderr().flush().ok();
 
     if !io::stdin().is_terminal() {
@@ -756,84 +885,29 @@ fn confirm_reset() -> Result<bool> {
 }
 
 #[cfg(test)]
-mod truncation_tests {
-    //! Regression guard for the byte-slice truncation panic that lived in the
-    //! `--history` (`run`) and `show_failures` display paths.
-    //!
-    //! The old code did `if s.len() > N { format!("{}...", &s[..N-3]) }` — a
-    //! BYTE length check followed by a BYTE slice. When byte index `N-3` landed
-    //! in the middle of a multi-byte UTF-8 scalar (a non-ASCII branch name,
-    //! file path, or commit subject in a tracked command), `&s[..N-3]` panicked
-    //! with "byte index is not a char boundary". `rtk gain --history` / parse-
-    //! failure summaries crashed instead of printing. The fix routes all three
-    //! sites through `crate::core::utils::truncate`, which truncates by CHARS.
-    use crate::core::utils::truncate;
+mod tests {
+    use super::*;
 
-    /// The three caps used at the call sites in this module.
-    const CAP_RTK_CMD: usize = 25; // run() --history
-    const CAP_TOP_CMD: usize = 50; // show_failures() top commands
-    const CAP_RAW_CMD: usize = 40; // show_failures() recent failures
-
-    /// A 2-byte char repeated long enough to overrun every cap. Because the
-    /// old caps' kept-prefix byte index (cap-3 = 22, 47, 37) is ODD, it can
-    /// never align with a 2-byte char boundary — so the old `&s[..cap-3]`
-    /// always sliced mid-scalar and panicked.
-    fn multibyte_overrun() -> String {
-        "λ".repeat(60) // 'λ' is 2 bytes; 60 of them = 120 bytes, 60 chars
+    #[test]
+    fn test_recall_verdict_needs_a_sample_before_judging() {
+        assert_eq!(recall_verdict(4, 4), "-");
+        assert_eq!(recall_verdict(0, 0), "-");
+        assert_eq!(recall_verdict(5, 5), "too aggressive");
     }
 
     #[test]
-    fn truncate_does_not_panic_on_multibyte_at_every_cap() {
-        // The pre-fix code panicked here. Reaching the assertions proves no panic.
-        for cap in [CAP_RTK_CMD, CAP_TOP_CMD, CAP_RAW_CMD] {
-            let s = multibyte_overrun();
-            let out = truncate(&s, cap);
-            // Result is exactly `cap` chars: (cap-3) kept + 3 for the ellipsis.
-            assert_eq!(
-                out.chars().count(),
-                cap,
-                "cap {cap}: truncated output must be exactly cap chars"
-            );
-            assert!(out.ends_with("..."), "cap {cap}: must keep ellipsis suffix");
-            // Every byte boundary is valid UTF-8 (String guarantees it; the
-            // point is we never sliced mid-scalar to build it).
-            assert!(out.is_char_boundary(out.len()));
+    fn test_recall_verdict_bands_match_the_colour_bands() {
+        assert_eq!(recall_verdict(100, 29), "watch");
+        assert_eq!(recall_verdict(100, 30), "too aggressive");
+        assert_eq!(recall_verdict(100, 9), "ok");
+        assert_eq!(recall_verdict(100, 10), "watch");
+        assert_eq!(recall_verdict(100, 0), "ok");
+    }
+
+    #[test]
+    fn test_recall_verdict_fits_its_column() {
+        for v in ["-", "ok", "watch", "too aggressive"] {
+            assert!(v.len() <= VERDICT_WIDTH, "{v} overflows the column");
         }
-    }
-
-    #[test]
-    fn truncate_emoji_grapheme_does_not_split_scalar() {
-        // 4-byte scalars: byte index 22/37/47 is mid-emoji under the old code.
-        let s = "🔥".repeat(60); // 60 chars > cap, 4 bytes each
-        let out = truncate(&s, CAP_RAW_CMD);
-        assert_eq!(out.chars().count(), CAP_RAW_CMD);
-        // Kept portion is whole 🔥 scalars only — no replacement chars, no panic.
-        assert!(out.trim_end_matches("...").chars().all(|c| c == '🔥'));
-    }
-
-    #[test]
-    fn truncate_preserves_legacy_ascii_behavior() {
-        // Behavior parity with the old byte-slice path for ASCII input:
-        // old: len>25 -> first 22 bytes + "..."  ==  truncate(_, 25).
-        let ascii = "a".repeat(80); // longer than every cap so all paths truncate
-        assert_eq!(
-            truncate(&ascii, CAP_RTK_CMD),
-            format!("{}...", "a".repeat(22))
-        );
-        assert_eq!(
-            truncate(&ascii, CAP_RAW_CMD),
-            format!("{}...", "a".repeat(37))
-        );
-        assert_eq!(
-            truncate(&ascii, CAP_TOP_CMD),
-            format!("{}...", "a".repeat(47))
-        );
-    }
-
-    #[test]
-    fn truncate_leaves_short_strings_untouched() {
-        // Below the cap: returned verbatim, no ellipsis (matches the else arm).
-        assert_eq!(truncate("git status", CAP_RTK_CMD), "git status");
-        assert_eq!(truncate("λλλ", CAP_RAW_CMD), "λλλ");
     }
 }

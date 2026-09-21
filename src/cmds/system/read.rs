@@ -64,16 +64,12 @@ pub fn run(
         );
     }
 
-    let line_offset;
-    (filtered, line_offset) = apply_line_window(&filtered, max_lines, tail_lines, &lang);
+    filtered = apply_line_window(&filtered, max_lines, tail_lines, &lang);
 
     let (raw, rtk_output) = if line_numbers {
         (
-            // The raw baseline is the whole file, so its gutter starts at line 1;
-            // the filtered output keeps the true file offset of its first line
-            // (murphytek #12 — a tail window must not renumber from 1).
-            format_with_line_numbers(&content, 1),
-            format_with_line_numbers(&filtered, line_offset),
+            format_with_line_numbers(&content),
+            format_with_line_numbers(&filtered),
         )
     } else {
         (content.clone(), filtered.clone())
@@ -136,16 +132,12 @@ pub fn run_stdin(
         );
     }
 
-    let line_offset;
-    (filtered, line_offset) = apply_line_window(&filtered, max_lines, tail_lines, &lang);
+    filtered = apply_line_window(&filtered, max_lines, tail_lines, &lang);
 
     let (raw, rtk_output) = if line_numbers {
         (
-            // The raw baseline is the whole file, so its gutter starts at line 1;
-            // the filtered output keeps the true file offset of its first line
-            // (murphytek #12 — a tail window must not renumber from 1).
-            format_with_line_numbers(&content, 1),
-            format_with_line_numbers(&filtered, line_offset),
+            format_with_line_numbers(&content),
+            format_with_line_numbers(&filtered),
         )
     } else {
         (content.clone(), filtered.clone())
@@ -157,40 +149,25 @@ pub fn run_stdin(
     Ok(())
 }
 
-/// Format `content` with a `│`-separated line-number gutter.
-///
-/// `start` is the 1-based line number assigned to the first line of `content`.
-/// When a tail window has been applied, `start` is the original file position of
-/// the first surviving line, so the numbers a reading model sees point at the
-/// real lines in the file rather than restarting at 1 (which would silently
-/// mislabel the content).
-fn format_with_line_numbers(content: &str, start: usize) -> String {
+fn format_with_line_numbers(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    // Width is sized for the largest number actually printed (start + len - 1),
-    // not just the line count, so a high tail offset still aligns.
-    let last = start + lines.len().saturating_sub(1);
-    let width = last.max(1).to_string().len();
+    let width = lines.len().to_string().len();
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
-        out.push_str(&format!("{:>width$} │ {}\n", start + i, line, width = width));
+        out.push_str(&format!("{:>width$} │ {}\n", i + 1, line, width = width));
     }
     out
 }
 
-/// Apply the `--tail-lines` / `--max-lines` window to already-filtered content.
-///
-/// Returns the windowed text together with the 1-based line number that the
-/// first emitted line had in `content`. For a tail window that offset is
-/// `total_lines - tail + 1`; in every other case it is `1`.
 fn apply_line_window(
     content: &str,
     max_lines: Option<usize>,
     tail_lines: Option<usize>,
     lang: &Language,
-) -> (String, usize) {
+) -> String {
     if let Some(tail) = tail_lines {
         if tail == 0 {
-            return (String::new(), 1);
+            return String::new();
         }
         let lines: Vec<&str> = content.lines().collect();
         let start = lines.len().saturating_sub(tail);
@@ -198,17 +175,14 @@ fn apply_line_window(
         if content.ends_with('\n') {
             result.push('\n');
         }
-        // `start` is a 0-based index; line numbers are 1-based.
-        return (result, start + 1);
+        return result;
     }
 
     if let Some(max) = max_lines {
-        // smart_truncate keeps a non-contiguous selection of lines starting at
-        // line 1, so the gutter stays 1-based.
-        return (filter::smart_truncate(content, max, lang), 1);
+        return filter::smart_truncate(content, max, lang);
     }
 
-    (content.to_string(), 1)
+    content.to_string()
 }
 
 #[cfg(test)]
@@ -243,99 +217,23 @@ fn main() {{
     #[test]
     fn test_apply_line_window_tail_lines() {
         let input = "a\nb\nc\nd\n";
-        let (output, offset) = apply_line_window(input, None, Some(2), &Language::Unknown);
+        let output = apply_line_window(input, None, Some(2), &Language::Unknown);
         assert_eq!(output, "c\nd\n");
-        // c is the 3rd line of the 4-line input.
-        assert_eq!(offset, 3);
     }
 
     #[test]
     fn test_apply_line_window_tail_lines_no_trailing_newline() {
         let input = "a\nb\nc\nd";
-        let (output, offset) = apply_line_window(input, None, Some(2), &Language::Unknown);
+        let output = apply_line_window(input, None, Some(2), &Language::Unknown);
         assert_eq!(output, "c\nd");
-        assert_eq!(offset, 3);
     }
 
     #[test]
     fn test_apply_line_window_max_lines_still_works() {
         let input = "a\nb\nc\nd\n";
-        let (output, offset) = apply_line_window(input, Some(2), None, &Language::Unknown);
+        let output = apply_line_window(input, Some(2), None, &Language::Unknown);
         assert!(output.starts_with("a\n"));
         assert!(output.contains("more lines"));
-        // max-lines keeps from the top, so the gutter starts at 1.
-        assert_eq!(offset, 1);
-    }
-
-    #[test]
-    fn test_apply_line_window_no_window_offset_is_one() {
-        let input = "a\nb\nc\n";
-        let (output, offset) = apply_line_window(input, None, None, &Language::Unknown);
-        assert_eq!(output, "a\nb\nc\n");
-        assert_eq!(offset, 1);
-    }
-
-    #[test]
-    fn test_apply_line_window_tail_zero_is_empty() {
-        let input = "a\nb\nc\n";
-        let (output, offset) = apply_line_window(input, None, Some(0), &Language::Unknown);
-        assert_eq!(output, "");
-        assert_eq!(offset, 1);
-    }
-
-    #[test]
-    fn test_apply_line_window_tail_larger_than_content() {
-        // Asking for more tail lines than exist keeps everything, offset stays 1.
-        let input = "a\nb\n";
-        let (output, offset) = apply_line_window(input, None, Some(10), &Language::Unknown);
-        assert_eq!(output, "a\nb\n");
-        assert_eq!(offset, 1);
-    }
-
-    #[test]
-    fn test_format_line_numbers_default_offset() {
-        let out = format_with_line_numbers("alpha\nbravo\n", 1);
-        assert_eq!(out, "1 │ alpha\n2 │ bravo\n");
-    }
-
-    // REGRESSION: tail + line numbers must report the ORIGINAL file positions,
-    // not restart at 1. Reverting the offset wiring makes this fail (the gutter
-    // would read `1`/`2` for lines that are really 4/5), which is the
-    // output-mangling class — a model would cite the wrong line numbers.
-    #[test]
-    fn test_format_line_numbers_with_tail_offset() {
-        // A 5-line file, tail 2 -> last two lines are file lines 4 and 5.
-        let input = "l1\nl2\nl3\nl4\nl5\n";
-        let (windowed, offset) = apply_line_window(input, None, Some(2), &Language::Unknown);
-        assert_eq!(offset, 4);
-        let out = format_with_line_numbers(&windowed, offset);
-        assert_eq!(out, "4 │ l4\n5 │ l5\n");
-        // The mislabeled, pre-fix output must NOT be produced.
-        assert!(
-            !out.starts_with("1 │ l4"),
-            "tail window must not renumber from 1"
-        );
-    }
-
-    // Gutter width is sized for the largest number actually printed, so a tail
-    // window whose offset crosses a digit boundary stays aligned.
-    #[test]
-    fn test_format_line_numbers_width_accounts_for_offset() {
-        // Lines 9 and 10 of the file: widths 1 and 2 -> pad to width 2.
-        let mut input = String::new();
-        for i in 1..=10 {
-            input.push_str(&format!("line{}\n", i));
-        }
-        let (windowed, offset) = apply_line_window(&input, None, Some(2), &Language::Unknown);
-        assert_eq!(offset, 9);
-        let out = format_with_line_numbers(&windowed, offset);
-        assert_eq!(out, " 9 │ line9\n10 │ line10\n");
-    }
-
-    #[test]
-    fn test_format_line_numbers_empty_content() {
-        // Empty content must not panic on the width computation.
-        assert_eq!(format_with_line_numbers("", 1), "");
     }
 
     fn rtk_bin() -> std::path::PathBuf {

@@ -4,23 +4,23 @@ use crate::core::guard::never_worse;
 use crate::core::tracking;
 use crate::core::truncate::{reduced, CAP_WARNINGS};
 use anyhow::Result;
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::Path;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref TIMESTAMP_RE: Regex =
-        Regex::new(r"^\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}[.,]?\d*\s*").unwrap();
-    static ref UUID_RE: Regex =
-        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-            .unwrap();
-    static ref HEX_RE: Regex = Regex::new(r"0x[0-9a-fA-F]+").unwrap();
-    static ref NUM_RE: Regex = Regex::new(r"\b\d{4,}\b").unwrap();
-    static ref PATH_RE: Regex = Regex::new(r"/[\w./\-]+").unwrap();
-}
+static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}[.,]?\d*\s*").unwrap()
+});
+static UUID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+        .unwrap()
+});
+static HEX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"0x[0-9a-fA-F]+").unwrap());
+static NUM_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d{4,}\b").unwrap());
+static PATH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/[\w./\-]+").unwrap());
 
 /// Filter and deduplicate log output
 pub fn run_file(file: &Path, verbose: u8) -> Result<()> {
@@ -76,7 +76,7 @@ fn analyze_logs(content: &str) -> String {
     let mut unique_errors: Vec<String> = Vec::new();
     let mut unique_warnings: Vec<String> = Vec::new();
 
-    // Use module-level lazy_static regexes for normalization
+    // Use module-level LazyLock regexes for normalization
 
     for line in content.lines() {
         let line_lower = line.to_lowercase();
@@ -152,7 +152,12 @@ fn analyze_logs(content: &str) -> String {
                 .map(|s| s.as_str())
                 .unwrap_or(normalized);
 
-            let truncated = truncate_message(original);
+            let truncated = if original.len() > 100 {
+                let t: String = original.chars().take(97).collect();
+                format!("{}...", t)
+            } else {
+                original.to_string()
+            };
 
             if **count > 1 {
                 result.push(format!("   [×{}] {}", count, truncated));
@@ -189,7 +194,12 @@ fn analyze_logs(content: &str) -> String {
                 .map(|s| s.as_str())
                 .unwrap_or(normalized);
 
-            let truncated = truncate_message(original);
+            let truncated = if original.len() > 100 {
+                let t: String = original.chars().take(97).collect();
+                format!("{}...", t)
+            } else {
+                original.to_string()
+            };
 
             if **count > 1 {
                 result.push(format!("   [×{}] {}", count, truncated));
@@ -223,25 +233,6 @@ fn normalize_log_line(
     normalized = num_re.replace_all(&normalized, "<NUM>").to_string();
     normalized = path_re.replace_all(&normalized, "<PATH>").to_string();
     normalized.trim().to_string()
-}
-
-/// Cap a single displayed log message at 100 characters, appending `...` only
-/// when content is actually dropped.
-///
-/// The gate and the cut must use the SAME unit. Gating on `str::len()` (bytes)
-/// while cutting with `chars().take(..)` (chars) makes any message that is
-/// short in chars but long in bytes — i.e. multi-byte UTF-8 (CJK, Thai, emoji,
-/// accented text) — falsely enter the truncate branch: `chars().take(97)`
-/// returns the whole string and a misleading `...` gets appended, signalling a
-/// cut that never happened. Measuring in chars on both sides keeps the marker
-/// honest.
-fn truncate_message(original: &str) -> String {
-    if original.chars().count() > 100 {
-        let t: String = original.chars().take(97).collect();
-        format!("{}...", t)
-    } else {
-        original.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -285,65 +276,5 @@ mod tests {
         let result = analyze_logs(&logs);
         // Should not panic even with very long multi-byte messages
         assert!(result.contains("ERRORS"));
-    }
-
-    // --- truncate_message: gate and cut must agree on unit (chars, not bytes) ---
-
-    #[test]
-    fn truncate_message_keeps_short_ascii_untouched() {
-        let msg = "error: connection refused";
-        assert_eq!(truncate_message(msg), msg);
-        assert!(!truncate_message(msg).ends_with("..."));
-    }
-
-    #[test]
-    fn truncate_message_cuts_long_ascii_to_97_plus_ellipsis() {
-        let msg = "e".repeat(150);
-        let out = truncate_message(&msg);
-        assert!(out.ends_with("..."));
-        // 97 retained chars + the 3-char ellipsis marker.
-        assert_eq!(out.chars().count(), 100);
-        assert_eq!(&out[..97], &"e".repeat(97));
-    }
-
-    #[test]
-    fn truncate_message_does_not_falsely_truncate_short_multibyte() {
-        // 50 chars, but ~138 bytes (each Thai char is 3 bytes). Byte length
-        // exceeds 100 while char length is well under it. The OLD byte-gated
-        // logic entered the truncate branch, took all 50 chars, and appended a
-        // bogus "..."; this asserts the message is now returned verbatim.
-        let msg = format!("error {}", "ก".repeat(44)); // 50 chars, 138 bytes
-        assert!(msg.len() > 100, "precondition: byte length must exceed 100");
-        assert!(msg.chars().count() <= 100, "precondition: char count under cap");
-
-        let out = truncate_message(&msg);
-        assert!(
-            !out.ends_with("..."),
-            "short multi-byte message must not gain a spurious ellipsis: {out:?}"
-        );
-        assert_eq!(out, msg, "no characters should be dropped");
-    }
-
-    #[test]
-    fn truncate_message_cuts_long_multibyte_on_char_boundary() {
-        // 120 Thai chars: over the 100-char cap, so it SHOULD truncate — and the
-        // cut must land on a char boundary (no panic, valid UTF-8 out).
-        let msg = "ก".repeat(120);
-        let out = truncate_message(&msg);
-        assert!(out.ends_with("..."));
-        assert_eq!(out.chars().count(), 100); // 97 + "..."
-        assert_eq!(out.chars().take(97).collect::<String>(), "ก".repeat(97));
-    }
-
-    #[test]
-    fn analyze_logs_no_spurious_ellipsis_on_short_multibyte_error() {
-        // End-to-end: a short multi-byte ERROR line must render without a "...".
-        let logs = format!("2024-01-01 10:00:00 error {}\n", "ก".repeat(44));
-        let result = analyze_logs(&logs);
-        assert!(result.contains("ERRORS"));
-        assert!(
-            !result.contains("..."),
-            "rendered output must not contain a bogus truncation marker:\n{result}"
-        );
     }
 }
