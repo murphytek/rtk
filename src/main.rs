@@ -15,6 +15,9 @@ use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
     prisma_cmd, tsc_cmd, vitest_cmd,
 };
+// JVM-ANT BEGIN
+use cmds::jvm::ant_cmd;
+// JVM-ANT END
 use cmds::jvm::{gradlew_cmd, mvn_cmd};
 use cmds::php::{
     ecs_cmd, paratest_cmd, pest_cmd, php_cmd, phpstan_cmd, phpt_cmd, phpunit_cmd, pint_cmd,
@@ -896,6 +899,13 @@ enum Commands {
         args: Vec<String>,
     },
 
+    // JVM-ANT BEGIN
+    /// Apache Ant commands with compact output
+    Ant {
+        #[command(subcommand)]
+        command: AntCommands,
+    },
+    // JVM-ANT END
     /// Android Gradle wrapper with compact output (build, test, lint)
     #[command(name = "gradlew")]
     Gradlew {
@@ -1658,6 +1668,45 @@ fn run_fallback(parse_error: clap::Error) -> Result<i32> {
         }
     }
 }
+
+// JVM-ANT BEGIN
+#[derive(Debug, Subcommand)]
+enum AntCommands {
+    /// Run the `build` target with compact output (use Other to invoke the default target instead)
+    Build {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Clean build artifacts with compact output
+    Clean {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run tests with compact output
+    Test {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compile sources with compact output
+    Compile {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Package the project with compact output
+    Package {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Install artifacts with compact output
+    Install {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: run any other ant target with noise-filtered output
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
+}
+// JVM-ANT END
 
 #[derive(Debug, Subcommand)]
 enum GtCommands {
@@ -2752,6 +2801,29 @@ fn run_cli() -> Result<i32> {
 
         Commands::GolangciLint { args } => golangci_cmd::run(&args, cli.verbose)?,
 
+        // JVM-ANT BEGIN
+        Commands::Ant { command } => match command {
+            AntCommands::Build { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Build, &args, cli.verbose)?
+            }
+            AntCommands::Clean { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Clean, &args, cli.verbose)?
+            }
+            AntCommands::Test { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Test, &args, cli.verbose)?
+            }
+            AntCommands::Compile { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Compile, &args, cli.verbose)?
+            }
+            AntCommands::Package { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Package, &args, cli.verbose)?
+            }
+            AntCommands::Install { args } => {
+                ant_cmd::run(ant_cmd::AntCommand::Install, &args, cli.verbose)?
+            }
+            AntCommands::Other(args) => ant_cmd::run_passthrough(&args, cli.verbose)?,
+        },
+        // JVM-ANT END
         Commands::Gradlew { args } => gradlew_cmd::run(&args, cli.verbose)?,
 
         Commands::Mvn { args } => mvn_cmd::run(&args, cli.verbose)?,

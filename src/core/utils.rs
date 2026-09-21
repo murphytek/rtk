@@ -533,6 +533,36 @@ pub fn resolved_command(name: &str) -> Command {
     }
 }
 
+/// Resolve a JVM build tool, preferring a project-local wrapper script
+/// (`./antw`, `./mvnw`, `./gradlew`) over the binary on PATH.
+pub fn resolved_build_command(name: &str) -> Command {
+    let wrapper = format!("{}w", name);
+
+    // On Windows, prefer the native wrapper first — `./mvnw` (a shebang shell
+    // script) doesn't execute under CreateProcess, while `mvnw.cmd` /
+    // `gradlew.bat` do. Most repos ship both side-by-side.
+    #[cfg(target_os = "windows")]
+    {
+        for ext in &["cmd", "bat"] {
+            let win_wrapper = format!("{}.{}", wrapper, ext);
+            if std::path::Path::new(&win_wrapper).exists() {
+                return Command::new(format!(".\\{}", win_wrapper));
+            }
+        }
+    }
+
+    // Unix-style wrapper (macOS, Linux, also works under Git Bash if no .cmd).
+    #[cfg(not(target_os = "windows"))]
+    {
+        let unix_wrapper = std::path::Path::new(&wrapper);
+        if unix_wrapper.exists() {
+            return Command::new(format!("./{}", wrapper));
+        }
+    }
+
+    resolved_command(name)
+}
+
 /// Return Composer bin directories in precedence order.
 ///
 /// Composer allows overriding the default `vendor/bin` via `COMPOSER_BIN_DIR`

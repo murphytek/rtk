@@ -29,6 +29,7 @@ pub fn resolve_filter(name: &str) -> Option<fn(&str) -> String> {
         "ruff-format" => Some(crate::cmds::python::ruff_cmd::filter_ruff_format),
         "sqlfluff-lint" => Some(crate::cmds::python::sqlfluff_cmd::filter_sqlfluff_lint_json),
         "prettier" => Some(crate::cmds::js::prettier_cmd::filter_prettier_output),
+        "ant" => Some(crate::cmds::jvm::ant_cmd::filter_ant_build),
         "phpunit" => Some(crate::cmds::php::phpunit_cmd::filter_phpunit_output),
         "pest" | "paratest" | "php-test" => {
             Some(crate::cmds::php::test_output::filter_test_runner_output)
@@ -271,7 +272,7 @@ pub fn run(filter_name: Option<&str>, passthrough: bool) -> Result<()> {
                 "Unknown filter '{}'. Available: cargo-test, pytest, go-test, go-build, \
                  ctest, tsc, vitest, grep, rg, find, fd, git-log, git-diff, git-status, \
                  log, mypy, ruff-check, ruff-format, sqlfluff-lint, prettier, phpunit, pest, \
-                 paratest, php-test, ecs, phpstan, pint",
+                 paratest, php-test, ecs, phpstan, pint, ant",
                 name
             )
         })?,

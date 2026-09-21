@@ -922,6 +922,16 @@ pub const RULES: &[RtkRule] = &[
         savings_pct: 82.0,
         ..RtkRule::DEFAULT
     },
+    // JVM-ANT BEGIN
+    RtkRule {
+        pattern: r"^ant\s+(build|clean|test|compile|package|install)\b",
+        rtk_cmd: "rtk ant",
+        rewrite_prefixes: &["ant"],
+        category: "Build",
+        savings_pct: 75.0,
+        ..RtkRule::DEFAULT
+    },
+    // JVM-ANT END
     RtkRule {
         pattern: r"^ping\b",
         rtk_cmd: "rtk ping",
