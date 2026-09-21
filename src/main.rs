@@ -3642,6 +3642,7 @@ mod tests {
         use clap::CommandFactory;
 
         const PASSTHROUGH: &[&str] = &[
+            "ant",
             "ls",
             "tree",
             "read",
