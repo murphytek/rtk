@@ -5,6 +5,24 @@ All notable changes to rtk (Rust Token Killer) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.0](https://github.com/murphytek/rtk/compare/v0.45.0...v0.50.0) (2026-09-21)
+
+
+### Features
+
+* **jvm:** re-apply Apache Ant support on top of upstream v0.49.0 ([00a43d2](https://github.com/murphytek/rtk/commit/00a43d24bb8ed6fdeaed92afcadb1681fba3f78d))
+* **mvn:** re-apply -B / --no-transfer-progress injection at source ([15bfd93](https://github.com/murphytek/rtk/commit/15bfd93356543103ac4fe29b5bd1a480661da681))
+
+
+### Bug Fixes
+
+* **ci:** restore GITHUB_TOKEN fallback for release-please in cd.yml ([315cd5b](https://github.com/murphytek/rtk/commit/315cd5b2f00a93a47890d4029267c52121f1ae99))
+
+
+### Miscellaneous Chores
+
+* pin next release version ([0a76a0d](https://github.com/murphytek/rtk/commit/0a76a0dd0d3cf719f0118f6fc19f67d91ab0089b))
+
 ## [0.49.0](https://github.com/rtk-ai/rtk/compare/v0.48.0...v0.49.0) (2026-09-11)
 
 
