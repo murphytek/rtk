@@ -234,8 +234,15 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
+      # Prefer a GitHub App token (the release then triggers downstream
+      # workflows); fall back to GITHUB_TOKEN when App secrets are absent so
+      # forks without them can still publish releases.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app-token
+        if: ${{ env.APP_CLIENT_ID != '' }}
+        continue-on-error: true
+        env:
+          APP_CLIENT_ID: ${{ secrets.APP_CLIENT_ID }}
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -285,18 +292,28 @@ jobs:
           cd release
           sha256sum * > checksums.txt
 
+      # softprops/action-gh-release PATCHes the release before uploading,
+      # which 403s ("Resource not accessible by integration") on this fork
+      # even with contents:write. `gh release upload` only touches the
+      # asset-upload endpoint, so it works with the plain GITHUB_TOKEN.
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          files: release/*
-          prerelease: ${{ inputs.prerelease }}
-          token: ${{ steps.app-token.outputs.token }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            args=""
+            [ "$PRERELEASE" = "true" ] && args="--prerelease"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $args
+          fi
+          gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
 
   notify-discord:
     name: Notify Discord
     needs: [release]
-    if: ${{ !inputs.prerelease }}
+    # Upstream-only: webhook + release notes are rtk-ai/rtk's.
+    if: ${{ !inputs.prerelease && github.repository == 'rtk-ai/rtk' }}
     runs-on: ubuntu-latest
     steps:
       - name: Get version
@@ -333,7 +350,8 @@ jobs:
   homebrew:
     name: Update Homebrew formula
     needs: [release]
-    if: ${{ !inputs.prerelease }}
+    # Upstream-only: pushes to rtk-ai/homebrew-tap.
+    if: ${{ !inputs.prerelease && github.repository == 'rtk-ai/rtk' }}
     runs-on: ubuntu-latest
     steps:
       - name: Get version
@@ -498,7 +516,8 @@ jobs:
   winget:
     name: Update winget manifest
     needs: [release]
-    if: ${{ !inputs.prerelease }}
+    # Upstream-only: publishes rtk-ai/rtk's winget manifest.
+    if: ${{ !inputs.prerelease && github.repository == 'rtk-ai/rtk' }}
     runs-on: ubuntu-latest
     # A failed submission must not fail the release workflow: cd.yml gates
     # update-latest-tag on build-release, so a red job here would leave the
