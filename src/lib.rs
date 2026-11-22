@@ -18,7 +18,7 @@ use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, ng_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
     prisma_cmd, tsc_cmd, vitest_cmd,
 };
-use cmds::jvm::{gradlew_cmd, mvn_cmd};
+use cmds::jvm::{ant_cmd, gradlew_cmd, mvn_cmd};
 use cmds::php::{
     ecs_cmd, paratest_cmd, pest_cmd, php_cmd, phpstan_cmd, phpt_cmd, phpunit_cmd, pint_cmd,
 };
@@ -1029,6 +1029,14 @@ enum Commands {
     #[command(name = "golangci-lint")]
     GolangciLint {
         /// Additional golangci-lint arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Apache Ant wrapper with compact output (build, clean, test, compile, package, install)
+    #[command(name = "ant")]
+    Ant {
+        /// Ant targets and arguments (e.g., build, clean test, -f build.xml compile)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -3621,6 +3629,8 @@ fn run_cli() -> Result<i32> {
 
         Commands::GolangciLint { args } => golangci_cmd::run(&args, cli.verbose)?,
 
+        Commands::Ant { args } => ant_cmd::run(&args, cli.verbose)?,
+
         Commands::Gradlew { args } => gradlew_cmd::run(&args, cli.verbose)?,
 
         Commands::Mvn { args } => mvn_cmd::run(&args, cli.verbose)?,
@@ -4079,6 +4089,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Pip { .. }
             | Commands::Uv { .. }
             | Commands::Go { .. }
+            | Commands::Ant { .. }
             | Commands::Gradlew { .. }
             | Commands::Mvn { .. }
             | Commands::Mvnd { .. }
@@ -4703,6 +4714,7 @@ mod tests {
             "go",
             "gt",
             "golangci-lint",
+            "ant",
             "gradlew",
             "mvn",
             "mvnd",

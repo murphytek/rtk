@@ -161,6 +161,7 @@ fn documented_tools() -> std::collections::BTreeSet<String> {
 /// new subcommand on an already-documented tool is not caught.
 const UNDOCUMENTED: &[&str] = &[
     "ansible-playbook",
+    "ant",
     "brew",
     "bun",
     "bundle",
